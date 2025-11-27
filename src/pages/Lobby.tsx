@@ -157,10 +157,36 @@ export default function Lobby() {
 
         {/* Lobby Info Bar */}
         {!isGameStarted && (
-          <div className="mt-2 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-4 text-muted-foreground">
-              <span>ID: <code className="text-foreground">{currentLobby.id.slice(0, 8)}...</code></span>
-              <span>Pass: <code className="text-gold font-bold">{currentLobby.password}</code></span>
+          <div className="mt-2 space-y-2">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>ID:</span>
+              <code className="text-foreground bg-muted px-2 py-1 rounded select-all break-all">{currentLobby.id}</code>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => {
+                  navigator.clipboard.writeText(currentLobby.id);
+                  toast({ title: "Copied!", description: "Lobby ID copied" });
+                }}
+              >
+                <Copy className="w-3 h-3" />
+              </Button>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>Password:</span>
+              <code className="text-gold font-bold bg-muted px-2 py-1 rounded select-all">{currentLobby.password}</code>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                onClick={() => {
+                  navigator.clipboard.writeText(currentLobby.password);
+                  toast({ title: "Copied!", description: "Password copied" });
+                }}
+              >
+                <Copy className="w-3 h-3" />
+              </Button>
             </div>
           </div>
         )}
