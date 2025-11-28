@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { PokerTable, PlayerList } from "@/components/casino/PokerTable";
 import { GameActions } from "@/components/casino/GameActions";
 import { BuyingModal } from "@/components/casino/BuyingModal";
 import { PlayerCard } from "@/components/casino/PlayerCard";
 import { useGameStore } from "@/store/gameStore";
+import { useLobby } from "@/hooks/useLobby";
 import { toast } from "@/hooks/use-toast";
 import { 
   ArrowLeft, 
@@ -15,9 +16,9 @@ import {
   Settings, 
   Users,
   LogOut,
-  Crown
+  Crown,
+  Loader2
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 export default function Lobby() {
   const { lobbyId } = useParams();
@@ -28,19 +29,42 @@ export default function Lobby() {
     players, 
     currentRound,
     setCurrentRound,
-    updatePlayer,
-    leaveLobby 
+    leaveLobby: clearLocalLobby
   } = useGameStore();
+
+  const { fetchLobby, updatePlayerChips, leaveLobby, loading } = useLobby(lobbyId);
 
   const [showBuyingModal, setShowBuyingModal] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'list'>('table');
+  const [initialLoading, setInitialLoading] = useState(true);
 
-  // Redirect if no lobby
+  // Fetch lobby on mount
   useEffect(() => {
-    if (!currentLobby || currentLobby.id !== lobbyId) {
+    if (lobbyId) {
+      fetchLobby(lobbyId).then(() => {
+        setInitialLoading(false);
+      });
+    }
+  }, [lobbyId, fetchLobby]);
+
+  // Redirect if lobby not found after loading
+  useEffect(() => {
+    if (!initialLoading && !currentLobby) {
+      toast({ title: "Error", description: "Lobby not found", variant: "destructive" });
       navigate('/');
     }
-  }, [currentLobby, lobbyId, navigate]);
+  }, [initialLoading, currentLobby, navigate]);
+
+  if (initialLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto text-gold" />
+          <p className="text-muted-foreground">Loading lobby...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentLobby || !currentUser) {
     return null;
@@ -49,6 +73,11 @@ export default function Lobby() {
   const currentPlayer = players.find(p => p.userId === currentUser.id);
   const isHost = currentPlayer?.isHost;
   const isGameStarted = currentLobby.status === 'in_game';
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast({ title: "Copied!", description: `${label} copied to clipboard` });
+  };
 
   const copyLobbyInfo = () => {
     const info = `Join my poker game!\nLobby ID: ${currentLobby.id}\nPassword: ${currentLobby.password}`;
@@ -62,7 +91,6 @@ export default function Lobby() {
       return;
     }
 
-    // Check if all players have chips
     const playersWithoutChips = players.filter(p => p.chips === 0);
     if (playersWithoutChips.length > 0) {
       toast({ 
@@ -73,7 +101,6 @@ export default function Lobby() {
       return;
     }
 
-    // Start the game (in real app, this would be a server call)
     setCurrentRound({
       id: `round-${Date.now()}`,
       lobbyId: currentLobby.id,
@@ -95,34 +122,35 @@ export default function Lobby() {
     toast({ title: "Game Started!", description: "Good luck!" });
   };
 
-  const handleBuy = (optionId: string, quantity: number) => {
+  const handleBuy = async (optionId: string, quantity: number) => {
     if (!currentPlayer) return;
     
     const option = currentLobby.buyingOptions.find(o => o.id === optionId);
     if (!option) return;
 
     const chipsToAdd = option.chipsPerBuying * quantity;
+    const newChips = currentPlayer.chips + chipsToAdd;
+    const newBuyings = currentPlayer.buyingsBought + quantity;
     
-    // Update player's chips (in real app, this would happen after payment)
-    updatePlayer(currentPlayer.id, {
-      chips: currentPlayer.chips + chipsToAdd,
-      buyingsBought: currentPlayer.buyingsBought + quantity,
-    });
-
-    toast({ 
-      title: "Chips Added!", 
-      description: `+${chipsToAdd.toLocaleString()} chips` 
-    });
+    const success = await updatePlayerChips(currentPlayer.id, newChips, newBuyings);
+    if (success) {
+      toast({ 
+        title: "Chips Added!", 
+        description: `+${chipsToAdd.toLocaleString()} chips` 
+      });
+    }
   };
 
   const handleAction = (action: string, amount?: number) => {
     console.log('Action:', action, amount);
-    // In real app, this would send to server via WebSocket
     toast({ title: "Action", description: `${action} ${amount || ''}` });
   };
 
-  const handleLeave = () => {
-    leaveLobby();
+  const handleLeave = async () => {
+    if (currentPlayer) {
+      await leaveLobby(currentPlayer.id);
+    }
+    clearLocalLobby();
     navigate('/');
   };
 
@@ -165,10 +193,7 @@ export default function Lobby() {
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6"
-                onClick={() => {
-                  navigator.clipboard.writeText(currentLobby.id);
-                  toast({ title: "Copied!", description: "Lobby ID copied" });
-                }}
+                onClick={() => copyToClipboard(currentLobby.id, "Lobby ID")}
               >
                 <Copy className="w-3 h-3" />
               </Button>
@@ -180,10 +205,7 @@ export default function Lobby() {
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6"
-                onClick={() => {
-                  navigator.clipboard.writeText(currentLobby.password);
-                  toast({ title: "Copied!", description: "Password copied" });
-                }}
+                onClick={() => copyToClipboard(currentLobby.password, "Password")}
               >
                 <Copy className="w-3 h-3" />
               </Button>

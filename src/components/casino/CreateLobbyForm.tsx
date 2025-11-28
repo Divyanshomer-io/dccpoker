@@ -12,13 +12,14 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Plus, Trash2, Users, Coins, ArrowLeft } from "lucide-react";
-import { useGameStore, generateId, generateLobbyPassword } from "@/store/gameStore";
+import { useGameStore } from "@/store/gameStore";
+import { useLobby } from "@/hooks/useLobby";
 import { toast } from "@/hooks/use-toast";
-import type { Lobby, BuyingOption, LobbyPlayer } from "@/types/casino";
 
 export function CreateLobbyForm() {
   const navigate = useNavigate();
-  const { currentUser, setCurrentLobby, setPlayers } = useGameStore();
+  const { currentUser } = useGameStore();
+  const { createLobby, loading } = useLobby();
   
   const [lobbyName, setLobbyName] = useState("");
   const [maxPlayers, setMaxPlayers] = useState("6");
@@ -46,7 +47,7 @@ export function CreateLobbyForm() {
     setBuyingOptions(updated);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!currentUser) {
@@ -59,51 +60,17 @@ export function CreateLobbyForm() {
       return;
     }
 
-    const lobbyId = generateId();
-    const password = generateLobbyPassword();
-
-    const lobby: Lobby = {
-      id: lobbyId,
+    const lobbyId = await createLobby({
       name: lobbyName.trim(),
-      hostUserId: currentUser.id,
-      password,
       maxPlayers: parseInt(maxPlayers),
-      status: 'open',
-      currencyCode: 'INR',
       chipUnitValue: parseFloat(chipUnitValue),
       minBlind: parseFloat(minBlind),
-      buyingOptions: buyingOptions.map((opt, i) => ({
-        id: `${lobbyId}-opt-${i}`,
-        lobbyId,
-        chipsPerBuying: opt.chipsPerBuying,
-        pricePerBuying: opt.pricePerBuying,
-      })),
-      createdAt: new Date(),
-    };
-
-    const hostPlayer: LobbyPlayer = {
-      id: generateId(),
-      lobbyId,
-      userId: currentUser.id,
-      user: currentUser,
-      seatIndex: 0,
-      chips: 0,
-      buyingsBought: 0,
-      isHost: true,
-      joinedAt: new Date(),
-      active: true,
-      isConnected: true,
-    };
-
-    setCurrentLobby(lobby);
-    setPlayers([hostPlayer]);
-
-    toast({
-      title: "Lobby Created!",
-      description: `Password: ${password}`,
+      buyingOptions,
     });
 
-    navigate(`/lobby/${lobbyId}`);
+    if (lobbyId) {
+      navigate(`/lobby/${lobbyId}`);
+    }
   };
 
   return (
@@ -261,8 +228,8 @@ export function CreateLobbyForm() {
           </Card>
 
           {/* Submit */}
-          <Button type="submit" variant="gold" size="xl" className="w-full">
-            Create Lobby
+          <Button type="submit" variant="gold" size="xl" className="w-full" disabled={loading}>
+            {loading ? "Creating..." : "Create Lobby"}
           </Button>
         </form>
       </div>
