@@ -5,17 +5,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, LogIn } from "lucide-react";
-import { useGameStore, generateId } from "@/store/gameStore";
+import { useGameStore } from "@/store/gameStore";
+import { useLobby } from "@/hooks/useLobby";
 import { toast } from "@/hooks/use-toast";
-import type { LobbyPlayer } from "@/types/casino";
 
 export function JoinLobbyForm() {
   const navigate = useNavigate();
-  const { currentUser, currentLobby, players, setPlayers } = useGameStore();
+  const { currentUser } = useGameStore();
+  const { joinLobby, loading } = useLobby();
   
   const [lobbyId, setLobbyId] = useState("");
   const [password, setPassword] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,55 +30,10 @@ export function JoinLobbyForm() {
       return;
     }
 
-    setIsLoading(true);
-
-    // Simulate joining (in real app, this would be a server call)
-    setTimeout(() => {
-      // For demo, we'll check if trying to join the current lobby
-      if (currentLobby && currentLobby.id === lobbyId.trim()) {
-        if (currentLobby.password !== password.trim().toUpperCase()) {
-          toast({ title: "Error", description: "Invalid password", variant: "destructive" });
-          setIsLoading(false);
-          return;
-        }
-
-        if (players.length >= currentLobby.maxPlayers) {
-          toast({ title: "Error", description: "Lobby is full", variant: "destructive" });
-          setIsLoading(false);
-          return;
-        }
-
-        // Check if user already in lobby
-        if (players.some(p => p.userId === currentUser.id)) {
-          toast({ title: "Info", description: "You're already in this lobby" });
-          navigate(`/lobby/${lobbyId}`);
-          setIsLoading(false);
-          return;
-        }
-
-        // Add player to lobby
-        const newPlayer: LobbyPlayer = {
-          id: generateId(),
-          lobbyId: currentLobby.id,
-          userId: currentUser.id,
-          user: currentUser,
-          seatIndex: players.length,
-          chips: 0,
-          buyingsBought: 0,
-          isHost: false,
-          joinedAt: new Date(),
-          active: true,
-          isConnected: true,
-        };
-
-        setPlayers([...players, newPlayer]);
-        toast({ title: "Success", description: "Joined lobby!" });
-        navigate(`/lobby/${lobbyId}`);
-      } else {
-        toast({ title: "Error", description: "Lobby not found", variant: "destructive" });
-      }
-      setIsLoading(false);
-    }, 1000);
+    const success = await joinLobby(lobbyId.trim(), password.trim());
+    if (success) {
+      navigate(`/lobby/${lobbyId.trim()}`);
+    }
   };
 
   return (
@@ -107,9 +62,12 @@ export function JoinLobbyForm() {
                   id="lobbyId"
                   value={lobbyId}
                   onChange={(e) => setLobbyId(e.target.value)}
-                  placeholder="Enter lobby ID"
-                  className="h-12 font-mono"
+                  placeholder="Enter full lobby ID"
+                  className="h-12 font-mono text-sm"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Paste the complete lobby ID shared by the host
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -129,9 +87,9 @@ export function JoinLobbyForm() {
                 variant="gold" 
                 size="xl" 
                 className="w-full"
-                disabled={isLoading}
+                disabled={loading}
               >
-                {isLoading ? "Joining..." : "Join Lobby"}
+                {loading ? "Joining..." : "Join Lobby"}
               </Button>
             </CardContent>
           </Card>

@@ -14,7 +14,133 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      buying_options: {
+        Row: {
+          chips_per_buying: number
+          id: string
+          lobby_id: string
+          price_per_buying: number
+        }
+        Insert: {
+          chips_per_buying: number
+          id: string
+          lobby_id: string
+          price_per_buying: number
+        }
+        Update: {
+          chips_per_buying?: number
+          id?: string
+          lobby_id?: string
+          price_per_buying?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "buying_options_lobby_id_fkey"
+            columns: ["lobby_id"]
+            isOneToOne: false
+            referencedRelation: "lobbies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lobbies: {
+        Row: {
+          chip_unit_value: number
+          created_at: string
+          currency_code: string
+          ended_at: string | null
+          host_user_id: string
+          id: string
+          max_players: number
+          min_blind: number
+          name: string
+          password: string
+          started_at: string | null
+          status: string
+        }
+        Insert: {
+          chip_unit_value: number
+          created_at?: string
+          currency_code?: string
+          ended_at?: string | null
+          host_user_id: string
+          id: string
+          max_players: number
+          min_blind: number
+          name: string
+          password: string
+          started_at?: string | null
+          status?: string
+        }
+        Update: {
+          chip_unit_value?: number
+          created_at?: string
+          currency_code?: string
+          ended_at?: string | null
+          host_user_id?: string
+          id?: string
+          max_players?: number
+          min_blind?: number
+          name?: string
+          password?: string
+          started_at?: string | null
+          status?: string
+        }
+        Relationships: []
+      }
+      lobby_players: {
+        Row: {
+          active: boolean
+          buyings_bought: number
+          chips: number
+          id: string
+          is_connected: boolean
+          is_host: boolean
+          joined_at: string
+          lobby_id: string
+          seat_index: number
+          user_avatar: string | null
+          user_id: string
+          user_name: string
+        }
+        Insert: {
+          active?: boolean
+          buyings_bought?: number
+          chips?: number
+          id: string
+          is_connected?: boolean
+          is_host?: boolean
+          joined_at?: string
+          lobby_id: string
+          seat_index: number
+          user_avatar?: string | null
+          user_id: string
+          user_name: string
+        }
+        Update: {
+          active?: boolean
+          buyings_bought?: number
+          chips?: number
+          id?: string
+          is_connected?: boolean
+          is_host?: boolean
+          joined_at?: string
+          lobby_id?: string
+          seat_index?: number
+          user_avatar?: string | null
+          user_id?: string
+          user_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lobby_players_lobby_id_fkey"
+            columns: ["lobby_id"]
+            isOneToOne: false
+            referencedRelation: "lobbies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
