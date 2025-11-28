@@ -43,6 +43,112 @@ export type Database = {
           },
         ]
       }
+      game_actions: {
+        Row: {
+          action: string
+          amount: number | null
+          id: string
+          player_id: string
+          round_id: string
+          timestamp: string
+        }
+        Insert: {
+          action: string
+          amount?: number | null
+          id: string
+          player_id: string
+          round_id: string
+          timestamp?: string
+        }
+        Update: {
+          action?: string
+          amount?: number | null
+          id?: string
+          player_id?: string
+          round_id?: string
+          timestamp?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "game_actions_round_id_fkey"
+            columns: ["round_id"]
+            isOneToOne: false
+            referencedRelation: "game_rounds"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      game_rounds: {
+        Row: {
+          all_in_players: Json
+          big_blind_seat_index: number
+          community_cards: Json
+          created_at: string
+          current_bet: number
+          current_turn_seat_index: number
+          dealer_seat_index: number
+          folded_players: Json
+          id: string
+          lobby_id: string
+          min_raise: number
+          player_bets: Json
+          player_hands: Json
+          pots: Json
+          round_number: number
+          small_blind_seat_index: number
+          stage: string
+          updated_at: string
+        }
+        Insert: {
+          all_in_players?: Json
+          big_blind_seat_index: number
+          community_cards?: Json
+          created_at?: string
+          current_bet?: number
+          current_turn_seat_index: number
+          dealer_seat_index: number
+          folded_players?: Json
+          id: string
+          lobby_id: string
+          min_raise: number
+          player_bets?: Json
+          player_hands?: Json
+          pots?: Json
+          round_number: number
+          small_blind_seat_index: number
+          stage?: string
+          updated_at?: string
+        }
+        Update: {
+          all_in_players?: Json
+          big_blind_seat_index?: number
+          community_cards?: Json
+          created_at?: string
+          current_bet?: number
+          current_turn_seat_index?: number
+          dealer_seat_index?: number
+          folded_players?: Json
+          id?: string
+          lobby_id?: string
+          min_raise?: number
+          player_bets?: Json
+          player_hands?: Json
+          pots?: Json
+          round_number?: number
+          small_blind_seat_index?: number
+          stage?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "game_rounds_lobby_id_fkey"
+            columns: ["lobby_id"]
+            isOneToOne: false
+            referencedRelation: "lobbies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lobbies: {
         Row: {
           chip_unit_value: number

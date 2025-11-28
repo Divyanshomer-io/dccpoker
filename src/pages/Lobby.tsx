@@ -8,7 +8,9 @@ import { BuyingModal } from "@/components/casino/BuyingModal";
 import { PlayerCard } from "@/components/casino/PlayerCard";
 import { useGameStore } from "@/store/gameStore";
 import { useLobby } from "@/hooks/useLobby";
+import { usePokerGame } from "@/hooks/usePokerGame";
 import { toast } from "@/hooks/use-toast";
+import type { PokerAction } from "@/types/casino";
 import { 
   ArrowLeft, 
   Copy, 
@@ -17,7 +19,8 @@ import {
   Users,
   LogOut,
   Crown,
-  Loader2
+  Loader2,
+  Trophy
 } from "lucide-react";
 
 export default function Lobby() {
@@ -27,12 +30,23 @@ export default function Lobby() {
     currentUser, 
     currentLobby, 
     players, 
-    currentRound,
-    setCurrentRound,
     leaveLobby: clearLocalLobby
   } = useGameStore();
 
   const { fetchLobby, updatePlayerChips, leaveLobby, loading } = useLobby(lobbyId);
+  
+  const { 
+    currentRound: gameRound,
+    loading: gameLoading,
+    startGame,
+    handleAction: gameHandleAction,
+    awardPot,
+    startNewRound,
+  } = usePokerGame({ 
+    lobbyId: lobbyId || '', 
+    players, 
+    minBlind: currentLobby?.minBlind || 1 
+  });
 
   const [showBuyingModal, setShowBuyingModal] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'list'>('table');
@@ -72,7 +86,8 @@ export default function Lobby() {
 
   const currentPlayer = players.find(p => p.userId === currentUser.id);
   const isHost = currentPlayer?.isHost;
-  const isGameStarted = currentLobby.status === 'in_game';
+  const isGameStarted = currentLobby.status === 'in_game' || gameRound !== null;
+  const activeRound = gameRound && gameRound.stage !== 'settled' ? gameRound : null;
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -85,7 +100,7 @@ export default function Lobby() {
     toast({ title: "Copied!", description: "Lobby info copied to clipboard" });
   };
 
-  const handleStartGame = () => {
+  const handleStartGame = async () => {
     if (players.length < 2) {
       toast({ title: "Error", description: "Need at least 2 players to start", variant: "destructive" });
       return;
@@ -101,25 +116,7 @@ export default function Lobby() {
       return;
     }
 
-    setCurrentRound({
-      id: `round-${Date.now()}`,
-      lobbyId: currentLobby.id,
-      roundNumber: 1,
-      dealerSeatIndex: 0,
-      smallBlindSeatIndex: 1,
-      bigBlindSeatIndex: players.length > 2 ? 2 : 0,
-      currentTurnSeatIndex: players.length > 2 ? 3 : 1,
-      stage: 'preflop',
-      pots: [{ id: 'main', amount: 0, contributors: [] }],
-      communityCards: [],
-      currentBet: currentLobby.minBlind * 2,
-      minRaise: currentLobby.minBlind * 2,
-      playerBets: {},
-      foldedPlayers: [],
-      allInPlayers: [],
-    });
-
-    toast({ title: "Game Started!", description: "Good luck!" });
+    await startGame(0);
   };
 
   const handleBuy = async (optionId: string, quantity: number) => {
@@ -141,9 +138,8 @@ export default function Lobby() {
     }
   };
 
-  const handleAction = (action: string, amount?: number) => {
-    console.log('Action:', action, amount);
-    toast({ title: "Action", description: `${action} ${amount || ''}` });
+  const handleAction = async (action: PokerAction, amount?: number) => {
+    await gameHandleAction(action, amount);
   };
 
   const handleLeave = async () => {
@@ -242,7 +238,7 @@ export default function Lobby() {
                 players={players}
                 currentUserId={currentUser.id}
                 chipUnitValue={currentLobby.chipUnitValue}
-                currentRound={currentRound}
+                currentRound={gameRound}
                 onBuyClick={() => setShowBuyingModal(true)}
               />
             </div>
@@ -251,23 +247,61 @@ export default function Lobby() {
               players={players}
               currentUserId={currentUser.id}
               chipUnitValue={currentLobby.chipUnitValue}
-              currentRound={currentRound}
+              currentRound={gameRound}
               onBuyClick={() => setShowBuyingModal(true)}
             />
           )}
         </div>
 
         {/* Action Area */}
-        {isGameStarted && currentPlayer && currentRound ? (
+        {activeRound && currentPlayer ? (
           <GameActions
-            canAct={currentRound.currentTurnSeatIndex === currentPlayer.seatIndex}
-            currentBet={currentRound.currentBet}
-            playerBet={currentRound.playerBets[currentPlayer.id] || 0}
+            canAct={activeRound.currentTurnSeatIndex === currentPlayer.seatIndex}
+            currentBet={activeRound.currentBet}
+            playerBet={activeRound.playerBets[currentPlayer.id] || 0}
             playerChips={currentPlayer.chips}
-            minRaise={currentRound.minRaise}
+            minRaise={activeRound.minRaise}
             chipUnitValue={currentLobby.chipUnitValue}
             onAction={handleAction}
           />
+        ) : gameRound?.stage === 'showdown' && isHost ? (
+          /* Showdown - Host selects winner */
+          <div className="p-4 border-t border-border bg-card/50 backdrop-blur-sm space-y-3">
+            <h3 className="text-sm font-medium text-center">Showdown - Select Winner</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {players
+                .filter(p => !gameRound.foldedPlayers.includes(p.id))
+                .map(player => (
+                  <Button
+                    key={player.id}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => awardPot(player.id)}
+                    className="flex items-center gap-2"
+                  >
+                    <span>{player.user.avatar}</span>
+                    <span>{player.user.name}</span>
+                    <Trophy className="w-4 h-4 text-gold" />
+                  </Button>
+                ))}
+            </div>
+          </div>
+        ) : gameRound?.stage === 'settled' ? (
+          /* Round settled - Start new round */
+          <div className="p-4 border-t border-border bg-card/50 backdrop-blur-sm space-y-3">
+            {isHost && (
+              <Button
+                variant="gold"
+                size="touch"
+                className="w-full"
+                onClick={startNewRound}
+                disabled={gameLoading}
+              >
+                <Play className="w-4 h-4 mr-2" />
+                Next Round
+              </Button>
+            )}
+          </div>
         ) : (
           /* Lobby Controls */
           <div className="p-4 border-t border-border bg-card/50 backdrop-blur-sm space-y-3">
@@ -298,13 +332,13 @@ export default function Lobby() {
                 </Button>
               )}
               
-              {isHost && (
+              {isHost && !isGameStarted && (
                 <Button
                   variant="gold"
                   size="touch"
                   className="flex-1"
                   onClick={handleStartGame}
-                  disabled={players.length < 2}
+                  disabled={players.length < 2 || gameLoading}
                 >
                   <Play className="w-4 h-4 mr-2" />
                   Start Game

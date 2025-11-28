@@ -136,8 +136,13 @@ export default function Index() {
       </main>
 
       {/* Footer */}
-      <footer className="p-4 text-center text-xs text-muted-foreground">
-        For friends playing poker together. Not a gambling service.
+      <footer className="p-4 text-center space-y-1">
+        <p className="text-xs text-muted-foreground">
+          For friends playing poker together. Not a gambling service.
+        </p>
+        <p className="text-xs text-gold font-medium">
+          Created by Divyanshu Lila
+        </p>
       </footer>
 
       {/* Profile Setup Modal */}
