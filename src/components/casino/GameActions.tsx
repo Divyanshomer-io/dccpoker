@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
@@ -23,8 +23,15 @@ export function GameActions({
   chipUnitValue,
   onAction,
 }: GameActionsProps) {
-  const [betAmount, setBetAmount] = useState(currentBet + minRaise);
+  const minBet = Math.max(currentBet + minRaise, minRaise);
+  const maxBet = playerChips + playerBet;
+  const [betAmount, setBetAmount] = useState(minBet);
   const [showBetSlider, setShowBetSlider] = useState(false);
+
+  // Reset bet amount when min changes
+  useEffect(() => {
+    setBetAmount(minBet);
+  }, [minBet]);
 
   const callAmount = currentBet - playerBet;
   const canCheck = callAmount === 0;
@@ -37,16 +44,20 @@ export function GameActions({
     onAction(action, amount);
   };
 
-  const maxBet = playerChips;
-  const minBet = Math.max(currentBet + minRaise, minRaise);
-
   return (
-    <div className={cn(
-      "bg-card/95 backdrop-blur-sm border-t border-border p-4 space-y-3",
-      !canAct && "opacity-50 pointer-events-none"
-    )}>
+    <div className="bg-card/95 backdrop-blur-sm border-t border-border p-4 space-y-3">
+      {/* Turn indicator */}
+      <div className={cn(
+        "text-center py-2 rounded-lg font-semibold text-sm transition-colors",
+        canAct 
+          ? "bg-gold/20 text-gold animate-pulse" 
+          : "bg-muted text-muted-foreground"
+      )}>
+        {canAct ? "🎯 Your Turn!" : "⏳ Waiting for other players..."}
+      </div>
+
       {/* Bet/Raise Slider */}
-      {showBetSlider && (
+      {showBetSlider && canAct && (
         <div className="space-y-3 p-3 bg-muted rounded-lg animate-scale-in">
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">Bet Amount</span>
@@ -122,13 +133,17 @@ export function GameActions({
 
       {/* Main Action Buttons */}
       {!showBetSlider && (
-        <div className="flex gap-2">
+        <div className={cn(
+          "flex gap-2",
+          !canAct && "opacity-50 pointer-events-none"
+        )}>
           {/* Fold */}
           <Button
             variant="fold"
             size="touch"
             onClick={() => handleAction('fold')}
             className="flex-1"
+            disabled={!canAct}
           >
             Fold
           </Button>
@@ -140,6 +155,7 @@ export function GameActions({
               size="touch"
               onClick={() => handleAction('check')}
               className="flex-1"
+              disabled={!canAct}
             >
               Check
             </Button>
@@ -149,6 +165,7 @@ export function GameActions({
               size="touch"
               onClick={() => handleAction('call')}
               className="flex-1"
+              disabled={!canAct}
             >
               <span className="flex flex-col items-center">
                 <span>Call</span>
@@ -164,6 +181,7 @@ export function GameActions({
               size="touch"
               onClick={() => setShowBetSlider(true)}
               className="flex-1"
+              disabled={!canAct}
             >
               {canBet ? 'Bet' : 'Raise'}
             </Button>
@@ -175,6 +193,7 @@ export function GameActions({
             size="touch"
             onClick={() => handleAction('allin', playerChips)}
             className="flex-1"
+            disabled={!canAct}
           >
             <span className="flex flex-col items-center">
               <span>All-In</span>
