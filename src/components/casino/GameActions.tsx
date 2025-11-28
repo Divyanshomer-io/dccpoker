@@ -23,7 +23,9 @@ export function GameActions({
   chipUnitValue,
   onAction,
 }: GameActionsProps) {
-  const minBet = Math.max(currentBet + minRaise, minRaise);
+  const minBet = currentBet === 0
+  ? minRaise                    // opening bet size
+  : (currentBet - playerBet) + minRaise;   // min raise amount
   const maxBet = playerChips + playerBet;
   const [betAmount, setBetAmount] = useState(minBet);
   const [showBetSlider, setShowBetSlider] = useState(false);
@@ -33,7 +35,7 @@ export function GameActions({
     setBetAmount(minBet);
   }, [minBet]);
 
-  const callAmount = currentBet - playerBet;
+  const callAmount =  Math.max(0, currentBet - playerBet);
   const canCheck = callAmount === 0;
   const canCall = callAmount > 0 && callAmount <= playerChips;
   const canRaise = playerChips > callAmount;
