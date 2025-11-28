@@ -86,7 +86,10 @@ export default function Lobby() {
 
   const currentPlayer = players.find(p => p.userId === currentUser.id);
   const isHost = currentPlayer?.isHost;
-  const isGameStarted = currentLobby.status === 'in_game' || gameRound !== null;
+  const isGameActive = gameRound && 
+                     gameRound.stage !== "waiting" &&
+                     gameRound.stage !== "settled";
+
   const activeRound = gameRound && gameRound.stage !== 'settled' ? gameRound : null;
 
   const copyToClipboard = (text: string, label: string) => {
