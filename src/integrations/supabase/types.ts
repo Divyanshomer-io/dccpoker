@@ -81,6 +81,7 @@ export type Database = {
       game_rounds: {
         Row: {
           all_in_players: Json
+          betting_round_start_seat: number | null
           big_blind_seat_index: number
           community_cards: Json
           created_at: string
@@ -89,10 +90,13 @@ export type Database = {
           dealer_seat_index: number
           folded_players: Json
           id: string
+          last_aggressor_seat: number | null
+          last_raise_amount: number | null
           lobby_id: string
           min_raise: number
           player_bets: Json
           player_hands: Json
+          player_states: Json | null
           pots: Json
           round_number: number
           small_blind_seat_index: number
@@ -101,6 +105,7 @@ export type Database = {
         }
         Insert: {
           all_in_players?: Json
+          betting_round_start_seat?: number | null
           big_blind_seat_index: number
           community_cards?: Json
           created_at?: string
@@ -109,10 +114,13 @@ export type Database = {
           dealer_seat_index: number
           folded_players?: Json
           id: string
+          last_aggressor_seat?: number | null
+          last_raise_amount?: number | null
           lobby_id: string
           min_raise: number
           player_bets?: Json
           player_hands?: Json
+          player_states?: Json | null
           pots?: Json
           round_number: number
           small_blind_seat_index: number
@@ -121,6 +129,7 @@ export type Database = {
         }
         Update: {
           all_in_players?: Json
+          betting_round_start_seat?: number | null
           big_blind_seat_index?: number
           community_cards?: Json
           created_at?: string
@@ -129,10 +138,13 @@ export type Database = {
           dealer_seat_index?: number
           folded_players?: Json
           id?: string
+          last_aggressor_seat?: number | null
+          last_raise_amount?: number | null
           lobby_id?: string
           min_raise?: number
           player_bets?: Json
           player_hands?: Json
+          player_states?: Json | null
           pots?: Json
           round_number?: number
           small_blind_seat_index?: number
