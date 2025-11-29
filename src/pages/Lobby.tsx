@@ -6,21 +6,23 @@ import { PokerTable, PlayerList } from "@/components/casino/PokerTable";
 import { GameActions } from "@/components/casino/GameActions";
 import { BuyingModal } from "@/components/casino/BuyingModal";
 import { PlayerCard } from "@/components/casino/PlayerCard";
+import { WinnerSelectionModal } from "@/components/casino/WinnerSelectionModal";
+import { SettlementModal } from "@/components/casino/SettlementModal";
 import { useGameStore } from "@/store/gameStore";
 import { useLobby } from "@/hooks/useLobby";
 import { usePokerGame } from "@/hooks/usePokerGame";
 import { toast } from "@/hooks/use-toast";
-import type { PokerAction } from "@/types/casino";
+import type { PokerAction, Settlement, SettlementEntry } from "@/types/casino";
 import { 
   ArrowLeft, 
   Copy, 
   Play, 
-  Settings, 
   Users,
   LogOut,
   Crown,
   Loader2,
-  Trophy
+  XCircle,
+  Clock
 } from "lucide-react";
 
 export default function Lobby() {
@@ -41,7 +43,7 @@ export default function Lobby() {
     startGame,
     handleAction: gameHandleAction,
     awardPot,
-    startNewRound,
+    endGame,
   } = usePokerGame({ 
     lobbyId: lobbyId || '', 
     players, 
@@ -49,8 +51,12 @@ export default function Lobby() {
   });
 
   const [showBuyingModal, setShowBuyingModal] = useState(false);
+  const [showWinnerModal, setShowWinnerModal] = useState(false);
+  const [showSettlementModal, setShowSettlementModal] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'list'>('table');
   const [initialLoading, setInitialLoading] = useState(true);
+  const [selectedWinners, setSelectedWinners] = useState<string[]>([]);
+  const [countdownSeconds, setCountdownSeconds] = useState(3);
 
   // Fetch lobby on mount
   useEffect(() => {
@@ -69,6 +75,24 @@ export default function Lobby() {
     }
   }, [initialLoading, currentLobby, navigate]);
 
+  // Countdown for auto next round
+  useEffect(() => {
+    if (gameRound?.stage === 'settled') {
+      setCountdownSeconds(3);
+      const interval = setInterval(() => {
+        setCountdownSeconds(prev => Math.max(0, prev - 1));
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [gameRound?.stage]);
+
+  // Show settlement modal when game ends
+  useEffect(() => {
+    if (currentLobby?.status === 'game_finished') {
+      setShowSettlementModal(true);
+    }
+  }, [currentLobby?.status]);
+
   if (initialLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -86,11 +110,12 @@ export default function Lobby() {
 
   const currentPlayer = players.find(p => p.userId === currentUser.id);
   const isHost = currentPlayer?.isHost;
+  const isGameStarted = currentLobby.status === 'in_game' || (gameRound !== null && gameRound.stage !== 'waiting');
   const isGameActive = gameRound && 
-                     gameRound.stage !== "waiting" &&
-                     gameRound.stage !== "settled";
-
-  const activeRound = gameRound && gameRound.stage !== 'settled' ? gameRound : null;
+    gameRound.stage !== 'waiting' && 
+    gameRound.stage !== 'settled' &&
+    gameRound.stage !== 'game_finished';
+  const activeRound = isGameActive ? gameRound : null;
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -153,6 +178,64 @@ export default function Lobby() {
     navigate('/');
   };
 
+  const handleEndGame = async () => {
+    if (confirm('Are you sure you want to end the game? This will show the final settlement.')) {
+      await endGame();
+    }
+  };
+
+  const handleSelectWinner = async () => {
+    if (selectedWinners.length === 0) {
+      toast({ title: 'Error', description: 'Please select at least one winner', variant: 'destructive' });
+      return;
+    }
+    await awardPot(selectedWinners);
+    setShowWinnerModal(false);
+    setSelectedWinners([]);
+  };
+
+  // Calculate settlement data
+  const calculateSettlement = (): Settlement => {
+    const entries: SettlementEntry[] = players.map(player => {
+      const startingChips = player.startingChips || player.buyingsBought * (currentLobby.buyingOptions[0]?.chipsPerBuying || 0);
+      const finalChips = player.chips;
+      const chipUnitValue = currentLobby.chipUnitValue;
+      const startingMoney = startingChips * chipUnitValue;
+      const finalMoney = finalChips * chipUnitValue;
+      const netChange = finalMoney - startingMoney;
+      
+      return {
+        playerId: player.id,
+        playerName: player.user.name,
+        playerAvatar: player.user.avatar,
+        startingChips,
+        finalChips,
+        startingMoney,
+        finalMoney,
+        netChange,
+        netChangePercent: startingMoney > 0 ? (netChange / startingMoney) * 100 : 0,
+      };
+    }).sort((a, b) => b.netChange - a.netChange);
+
+    return {
+      entries,
+      transfers: [],
+      chipUnitValue: currentLobby.chipUnitValue,
+      currencyCode: currentLobby.currencyCode,
+    };
+  };
+
+  // Get non-folded players for winner selection
+  const nonFoldedPlayers = gameRound 
+    ? players.filter(p => !gameRound.foldedPlayers.includes(p.id))
+    : [];
+
+  // Get player's committed chips for display
+  const getPlayerCommitted = (playerId: string) => {
+    if (!gameRound?.playerStates) return 0;
+    return gameRound.playerStates[playerId]?.committed || 0;
+  };
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
@@ -173,16 +256,25 @@ export default function Lobby() {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* End Game Button - Always visible for host during game */}
+            {isHost && isGameStarted && (
+              <Button 
+                variant="destructive" 
+                size="sm"
+                onClick={handleEndGame}
+                className="text-xs"
+              >
+                <XCircle className="w-4 h-4 mr-1" />
+                End Game
+              </Button>
+            )}
             <Button variant="ghost" size="icon" onClick={copyLobbyInfo}>
               <Copy className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="icon">
-              <Settings className="w-4 h-4" />
             </Button>
           </div>
         </div>
 
-        {/* Lobby Info Bar */}
+        {/* Lobby Info Bar - Only show when not in game */}
         {!isGameStarted && (
           <div className="mt-2 space-y-2">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -261,49 +353,43 @@ export default function Lobby() {
           <GameActions
             canAct={activeRound.currentTurnSeatIndex === currentPlayer.seatIndex}
             currentBet={activeRound.currentBet}
-            playerBet={activeRound.playerBets[currentPlayer.id] || 0}
+            playerBet={getPlayerCommitted(currentPlayer.id)}
             playerChips={currentPlayer.chips}
-            minRaise={activeRound.minRaise}
+            minRaise={activeRound.lastRaiseAmount || activeRound.minRaise}
             chipUnitValue={currentLobby.chipUnitValue}
             onAction={handleAction}
           />
-        ) : gameRound?.stage === 'showdown' && isHost ? (
+        ) : gameRound?.stage === 'showdown' ? (
           /* Showdown - Host selects winner */
           <div className="p-4 border-t border-border bg-card/50 backdrop-blur-sm space-y-3">
-            <h3 className="text-sm font-medium text-center">Showdown - Select Winner</h3>
-            <div className="grid grid-cols-2 gap-2">
-              {players
-                .filter(p => !gameRound.foldedPlayers.includes(p.id))
-                .map(player => (
-                  <Button
-                    key={player.id}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => awardPot(player.id)}
-                    className="flex items-center gap-2"
-                  >
-                    <span>{player.user.avatar}</span>
-                    <span>{player.user.name}</span>
-                    <Trophy className="w-4 h-4 text-gold" />
-                  </Button>
-                ))}
-            </div>
+            <h3 className="text-sm font-medium text-center text-gold">🎯 Showdown!</h3>
+            {isHost ? (
+              <>
+                <p className="text-xs text-center text-muted-foreground">
+                  Select the winner(s) of this hand
+                </p>
+                <Button
+                  variant="gold"
+                  size="touch"
+                  className="w-full"
+                  onClick={() => setShowWinnerModal(true)}
+                >
+                  Select Winner
+                </Button>
+              </>
+            ) : (
+              <p className="text-xs text-center text-muted-foreground">
+                Waiting for host to select winner...
+              </p>
+            )}
           </div>
         ) : gameRound?.stage === 'settled' ? (
-          /* Round settled - Start new round */
-          <div className="p-4 border-t border-border bg-card/50 backdrop-blur-sm space-y-3">
-            {isHost && (
-              <Button
-                variant="gold"
-                size="touch"
-                className="w-full"
-                onClick={startNewRound}
-                disabled={gameLoading}
-              >
-                <Play className="w-4 h-4 mr-2" />
-                Next Round
-              </Button>
-            )}
+          /* Round settled - Auto next round countdown */
+          <div className="p-4 border-t border-border bg-card/50 backdrop-blur-sm">
+            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+              <Clock className="w-4 h-4" />
+              <span className="text-sm">Next hand in {countdownSeconds}...</span>
+            </div>
           </div>
         ) : (
           /* Lobby Controls */
@@ -348,7 +434,7 @@ export default function Lobby() {
                 </Button>
               )}
 
-              {!isHost && (
+              {!isHost && !isGameStarted && (
                 <Button
                   variant="outline"
                   size="touch"
@@ -374,6 +460,34 @@ export default function Lobby() {
         currentBuyings={currentPlayer?.buyingsBought || 0}
         maxBuyings={10}
         onBuy={handleBuy}
+      />
+
+      {/* Winner Selection Modal */}
+      <WinnerSelectionModal
+        open={showWinnerModal}
+        onClose={() => setShowWinnerModal(false)}
+        players={nonFoldedPlayers}
+        pots={gameRound?.pots || []}
+        chipUnitValue={currentLobby.chipUnitValue}
+        selectedWinners={selectedWinners}
+        onSelectWinner={(id) => {
+          setSelectedWinners(prev => 
+            prev.includes(id) 
+              ? prev.filter(w => w !== id)
+              : [...prev, id]
+          );
+        }}
+        onConfirm={handleSelectWinner}
+      />
+
+      {/* Settlement Modal */}
+      <SettlementModal
+        open={showSettlementModal}
+        onClose={() => {
+          setShowSettlementModal(false);
+          navigate('/');
+        }}
+        settlement={calculateSettlement()}
       />
     </div>
   );
