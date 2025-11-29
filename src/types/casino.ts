@@ -1,9 +1,9 @@
-// Core types for Daddy Chill Casino
+// Core types for Daddy Chill Casino - Texas Hold'em
 
 export interface User {
   id: string;
   name: string;
-  avatar?: string; // emoji or image url
+  avatar?: string;
   createdAt: Date;
 }
 
@@ -20,9 +20,9 @@ export interface Lobby {
   hostUserId: string;
   password: string;
   maxPlayers: number;
-  status: 'open' | 'in_game' | 'closed';
+  status: 'open' | 'in_game' | 'closed' | 'game_finished';
   currencyCode: string;
-  chipUnitValue: number; // value of 1 chip in currency
+  chipUnitValue: number;
   minBlind: number;
   buyingOptions: BuyingOption[];
   createdAt: Date;
@@ -42,14 +42,32 @@ export interface LobbyPlayer {
   joinedAt: Date;
   active: boolean;
   isConnected: boolean;
+  startingChips?: number;
 }
 
-export type GameStage = 'waiting' | 'preflop' | 'flop' | 'turn' | 'river' | 'showdown' | 'settled';
+export type GameStage = 
+  | 'waiting' 
+  | 'preflop' 
+  | 'flop' 
+  | 'turn' 
+  | 'river' 
+  | 'showdown' 
+  | 'settled'
+  | 'game_finished';
 
 export interface Pot {
   id: string;
   amount: number;
-  contributors: string[]; // player ids
+  contributors: string[];
+}
+
+export interface PlayerHandState {
+  playerId: string;
+  committed: number;
+  hasFolded: boolean;
+  isAllIn: boolean;
+  hasActedThisRound: boolean;
+  lastAction?: PokerAction;
 }
 
 export interface GameRound {
@@ -61,45 +79,59 @@ export interface GameRound {
   bigBlindSeatIndex: number;
   currentTurnSeatIndex: number;
   stage: GameStage;
-  pots: Pot[];
-  communityCards: string[];
   currentBet: number;
   minRaise: number;
-  playerBets: Record<string, number>; // playerId -> bet amount this round
+  lastRaiseAmount: number;
+  pots: Pot[];
+  communityCards: string[];
+  playerHands?: Record<string, string[]>;
+  playerStates: Record<string, PlayerHandState>;
+  playerBets: Record<string, number>;
   foldedPlayers: string[];
   allInPlayers: string[];
+  bettingRoundStartSeat?: number;
+  lastAggressorSeat?: number;
 }
 
 export type PokerAction = 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'allin';
 
 export interface GameAction {
+  id: string;
+  roundId: string;
   playerId: string;
   action: PokerAction;
   amount?: number;
+  totalCommitted?: number;
   timestamp: Date;
 }
 
 export interface SettlementEntry {
   playerId: string;
   playerName: string;
+  playerAvatar?: string;
+  startingChips: number;
   finalChips: number;
-  initialInvested: number;
-  rupeeEquivalent: number;
+  startingMoney: number;
+  finalMoney: number;
   netChange: number;
+  netChangePercent: number;
 }
 
 export interface Transfer {
   from: string;
+  fromName: string;
   to: string;
+  toName: string;
   amount: number;
 }
 
 export interface Settlement {
   entries: SettlementEntry[];
   transfers: Transfer[];
+  chipUnitValue: number;
+  currencyCode: string;
 }
 
-// Form types
 export interface CreateLobbyForm {
   name: string;
   maxPlayers: number;
@@ -118,9 +150,17 @@ export interface JoinLobbyForm {
   displayName: string;
 }
 
-// Avatar emoji options
 export const AVATAR_EMOJIS = [
   '😎', '🤠', '🦊', '🐺', '🦁', '🐯', '🐻', '🐼',
   '🦄', '🐉', '🎭', '🎪', '🎰', '🃏', '♠️', '♥️',
   '♦️', '♣️', '👑', '💎', '🔥', '⚡', '🌟', '💰'
 ];
+
+export interface ActionValidation {
+  valid: boolean;
+  reason?: string;
+  callAmount?: number;
+  minBet?: number;
+  minRaise?: number;
+  maxBet?: number;
+}
