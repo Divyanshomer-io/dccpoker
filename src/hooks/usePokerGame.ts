@@ -9,6 +9,7 @@ import {
   calculateBlindPositions,
   getFirstToActSeat,
   getNextActiveSeat,
+  getNextDealerSeat,
   validateAction,
   calculatePots,
   distributePot,
@@ -20,6 +21,8 @@ import {
   initializePlayerStates,
   postBlinds,
   resetForNewBettingRound,
+  getActivePlayers,
+  shouldAutoFold,
 } from '@/lib/pokerEngine';
 
 interface UsePokerGameProps {
@@ -35,6 +38,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
   const [currentRound, setLocalRound] = useState<GameRound | null>(null);
   const [loading, setLoading] = useState(false);
   const autoNextRoundTimer = useRef<NodeJS.Timeout | null>(null);
+  const deckRef = useRef<string[]>([]);
 
   const parseRoundFromDB = useCallback((data: any): GameRound => {
     const rawPlayerStates = data.player_states as Record<string, any> | null;
@@ -43,7 +47,6 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
     if (rawPlayerStates && Object.keys(rawPlayerStates).length > 0) {
       playerStates = rawPlayerStates as Record<string, PlayerHandState>;
     } else {
-      // Build playerStates from legacy data
       const foldedPlayers = (data.folded_players as string[]) || [];
       const allInPlayers = (data.all_in_players as string[]) || [];
       const playerBets = (data.player_bets as Record<string, number>) || {};
@@ -101,6 +104,12 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
     return null;
   }, [lobbyId, setCurrentRound, parseRoundFromDB]);
 
+  // Create new deck and store it for the round
+  const createNewDeck = useCallback(() => {
+    deckRef.current = shuffleDeck(createDeck());
+    return deckRef.current;
+  }, []);
+
   const startGame = async (dealerIndex: number = 0) => {
     if (!currentUser) return false;
     setLoading(true);
@@ -127,7 +136,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
       const initialRound: GameRound = {
         id: roundId,
         lobbyId,
-        roundNumber: 1,
+        roundNumber: (currentRound?.roundNumber || 0) + 1,
         dealerSeatIndex: dealerSeat,
         smallBlindSeatIndex: sbSeat,
         bigBlindSeatIndex: bbSeat,
@@ -157,7 +166,8 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
       
       const pots = calculatePots(statesAfterBlinds);
 
-      const deck = shuffleDeck(createDeck());
+      // Create and store deck for this round
+      const deck = createNewDeck();
       const playerHands: Record<string, string[]> = {};
       let cardIndex = 0;
       for (const player of activePlayers) {
@@ -177,11 +187,11 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
       const roundData = {
         id: roundId,
         lobby_id: lobbyId,
-        round_number: 1,
+        round_number: (currentRound?.roundNumber || 0) + 1,
         dealer_seat_index: dealerSeat,
         small_blind_seat_index: sbSeat,
         big_blind_seat_index: bbSeat,
-        current_turn_seat_index: firstToActSeat || sbSeat,
+        current_turn_seat_index: firstToActSeat ?? sbSeat,
         stage: 'preflop',
         pots: JSON.parse(JSON.stringify(pots)),
         community_cards: [],
@@ -204,6 +214,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
         .update({ status: 'in_game', started_at: new Date().toISOString() })
         .eq('id', lobbyId);
 
+      // Deduct blinds from player chips
       for (const [playerId, amount] of Object.entries(chipDeductions)) {
         const player = activePlayers.find(p => p.id === playerId);
         if (player) {
@@ -233,6 +244,12 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
 
     if (currentRound.currentTurnSeatIndex !== currentPlayer.seatIndex) {
       toast({ title: 'Not your turn!', variant: 'destructive' });
+      return false;
+    }
+
+    // Check if player should be auto-folded (0 chips)
+    if (shouldAutoFold(currentPlayer, currentRound)) {
+      toast({ title: 'You need chips to play', description: 'Buy chips to continue', variant: 'destructive' });
       return false;
     }
 
@@ -315,6 +332,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           updatedRound.lastRaiseAmount = betAmount;
           updatedRound.lastAggressorSeat = currentPlayer.seatIndex;
 
+          // Reset hasActedThisRound for other players
           for (const [pid, state] of Object.entries(updatedStates)) {
             if (pid !== playerId && !state.hasFolded && !state.isAllIn) {
               updatedStates[pid] = { ...state, hasActedThisRound: false };
@@ -349,6 +367,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           }
           updatedRound.lastAggressorSeat = currentPlayer.seatIndex;
 
+          // Reset hasActedThisRound for other players
           for (const [pid, state] of Object.entries(updatedStates)) {
             if (pid !== playerId && !state.hasFolded && !state.isAllIn) {
               updatedStates[pid] = { ...state, hasActedThisRound: false };
@@ -382,6 +401,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
             }
             updatedRound.lastAggressorSeat = currentPlayer.seatIndex;
 
+            // Reset hasActedThisRound for other players
             for (const [pid, state] of Object.entries(updatedStates)) {
               if (pid !== playerId && !state.hasFolded && !state.isAllIn) {
                 updatedStates[pid] = { ...state, hasActedThisRound: false };
@@ -396,6 +416,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
 
       updatedRound.playerStates = updatedStates;
 
+      // Deduct chips from player
       if (chipsToDeduct > 0) {
         await supabase
           .from('lobby_players')
@@ -403,18 +424,22 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           .eq('id', playerId);
       }
 
+      // Recalculate pots
       updatedRound.pots = calculatePots(updatedStates);
 
+      // Check if hand is over (all but one folded)
       if (isHandOver(players, updatedRound)) {
         const winner = getWinnerByFold(players, updatedRound);
         if (winner) {
           const potTotal = updatedRound.pots.reduce((sum, pot) => sum + pot.amount, 0);
           
+          // CRITICAL FIX: Award pot to winner immediately
           const winnerPlayer = players.find(p => p.id === winner.id);
           if (winnerPlayer) {
+            const newChips = winnerPlayer.chips - chipsToDeduct + potTotal;
             await supabase
               .from('lobby_players')
-              .update({ chips: winnerPlayer.chips + potTotal })
+              .update({ chips: newChips >= 0 ? newChips : winnerPlayer.chips + potTotal })
               .eq('id', winner.id);
           }
 
@@ -422,47 +447,70 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           toast({ title: `${winner.user.name} wins!`, description: `Won ${potTotal.toLocaleString()} chips` });
         }
       } else if (isBettingRoundComplete(players, updatedRound)) {
+        // Betting round complete - advance to next stage
         if (allPlayersAllIn(players, updatedRound)) {
+          // All players all-in - go straight to showdown and reveal all cards
           updatedRound.stage = 'showdown';
-          const deck = shuffleDeck(createDeck());
+          
+          // Use stored deck or create new one
+          if (deckRef.current.length === 0) {
+            deckRef.current = shuffleDeck(createDeck());
+          }
+          const deck = deckRef.current;
+          const startIndex = Object.keys(updatedRound.playerHands || {}).length * 2;
+          
           if (updatedRound.communityCards.length === 0) {
-            updatedRound.communityCards = deck.slice(0, 5);
+            updatedRound.communityCards = deck.slice(startIndex, startIndex + 5);
           } else if (updatedRound.communityCards.length === 3) {
-            updatedRound.communityCards = [...updatedRound.communityCards, deck[0], deck[1]];
+            updatedRound.communityCards = [...updatedRound.communityCards, deck[startIndex], deck[startIndex + 1]];
           } else if (updatedRound.communityCards.length === 4) {
-            updatedRound.communityCards = [...updatedRound.communityCards, deck[0]];
+            updatedRound.communityCards = [...updatedRound.communityCards, deck[startIndex]];
           }
         } else {
+          // Normal stage advancement
           const nextStage = getNextStage(updatedRound.stage);
-          updatedRound.stage = nextStage;
+          updatedRound.stage = nextStage as GameStage;
           updatedRound.currentBet = 0;
           updatedRound.lastRaiseAmount = minBlind * 2;
+          updatedRound.lastAggressorSeat = undefined;
 
+          // Reset hasActedThisRound for new betting round
           updatedRound.playerStates = resetForNewBettingRound(updatedStates);
 
+          // Deal community cards based on stage
+          if (deckRef.current.length === 0) {
+            deckRef.current = shuffleDeck(createDeck());
+          }
+          const deck = deckRef.current;
+          const startIndex = Object.keys(updatedRound.playerHands || {}).length * 2;
+
           if (nextStage === 'flop') {
-            const deck = shuffleDeck(createDeck());
-            updatedRound.communityCards = deck.slice(0, 3);
+            updatedRound.communityCards = deck.slice(startIndex, startIndex + 3);
           } else if (nextStage === 'turn') {
-            const deck = shuffleDeck(createDeck());
-            updatedRound.communityCards = [...updatedRound.communityCards, deck[0]];
+            updatedRound.communityCards = [...updatedRound.communityCards, deck[startIndex + 3]];
           } else if (nextStage === 'river') {
-            const deck = shuffleDeck(createDeck());
-            updatedRound.communityCards = [...updatedRound.communityCards, deck[0]];
+            updatedRound.communityCards = [...updatedRound.communityCards, deck[startIndex + 4]];
+          } else if (nextStage === 'showdown') {
+            // showdown - no more cards to deal, host will select winner
           }
 
+          // Set first to act for new betting round
           if (nextStage !== 'showdown' && nextStage !== 'settled') {
             const firstToAct = getFirstToActSeat(players, updatedRound, 'postflop');
-            updatedRound.currentTurnSeatIndex = firstToAct || updatedRound.dealerSeatIndex;
+            if (firstToAct !== null) {
+              updatedRound.currentTurnSeatIndex = firstToAct;
+            }
           }
         }
       } else {
+        // Continue betting round - advance to next player
         const nextSeat = getNextActiveSeat(players, updatedRound, currentPlayer.seatIndex, false);
         if (nextSeat !== null) {
           updatedRound.currentTurnSeatIndex = nextSeat;
         }
       }
 
+      // Update database
       const { error } = await supabase
         .from('game_rounds')
         .update({
@@ -483,6 +531,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
 
       if (error) throw error;
 
+      // Log action
       await supabase.from('game_actions').insert({
         id: generateId(),
         round_id: currentRound.id,
@@ -508,25 +557,41 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
     
     setLoading(true);
     try {
+      // CRITICAL FIX: Track total chips awarded to each player
+      const chipsAwarded: Record<string, number> = {};
+
       for (const pot of currentRound.pots) {
         if (potId && pot.id !== potId) continue;
 
+        // Only eligible winners can win from this pot
         const eligibleWinners = winners.filter(w => pot.contributors.includes(w));
-        const actualWinners = eligibleWinners.length > 0 ? eligibleWinners : winners;
+        const actualWinners = eligibleWinners.length > 0 ? eligibleWinners : winners.filter(w => {
+          // Fallback: allow any non-folded player
+          const state = currentRound.playerStates[w];
+          return state && !state.hasFolded;
+        });
         
+        if (actualWinners.length === 0) continue;
+
         const distribution = distributePot(pot, actualWinners, players, currentRound.dealerSeatIndex);
         
         for (const [winnerId, chips] of Object.entries(distribution)) {
-          const winner = players.find(p => p.id === winnerId);
-          if (winner) {
-            await supabase
-              .from('lobby_players')
-              .update({ chips: winner.chips + chips })
-              .eq('id', winnerId);
-          }
+          chipsAwarded[winnerId] = (chipsAwarded[winnerId] || 0) + chips;
         }
       }
 
+      // Update player chips in database
+      for (const [winnerId, chips] of Object.entries(chipsAwarded)) {
+        const winner = players.find(p => p.id === winnerId);
+        if (winner && chips > 0) {
+          await supabase
+            .from('lobby_players')
+            .update({ chips: winner.chips + chips })
+            .eq('id', winnerId);
+        }
+      }
+
+      // Update round stage to settled
       await supabase
         .from('game_rounds')
         .update({ stage: 'settled' })
@@ -556,20 +621,46 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
   const startNewRound = useCallback(async () => {
     if (!currentRound) return false;
 
-    const activePlayers = players
-      .filter(p => p.chips > 0 && p.active)
-      .sort((a, b) => a.seatIndex - b.seatIndex);
+    // Get players with chips for next round
+    const { data: freshPlayers } = await supabase
+      .from('lobby_players')
+      .select('*')
+      .eq('lobby_id', lobbyId)
+      .eq('active', true);
+
+    const activePlayers = (freshPlayers || [])
+      .filter((p: any) => p.chips > 0)
+      .sort((a: any, b: any) => a.seat_index - b.seat_index);
 
     if (activePlayers.length < 2) {
       toast({ title: 'Game Over', description: 'Not enough players with chips to continue' });
+      // End the game
+      await supabase
+        .from('lobbies')
+        .update({ status: 'game_finished', ended_at: new Date().toISOString() })
+        .eq('id', lobbyId);
       return false;
     }
 
-    const currentDealerIndex = activePlayers.findIndex(p => p.seatIndex === currentRound.dealerSeatIndex);
-    const nextDealerIndex = (currentDealerIndex + 1) % activePlayers.length;
+    // Get next dealer seat
+    const nextDealerSeat = getNextDealerSeat(
+      activePlayers.map((p: any) => ({
+        ...p,
+        seatIndex: p.seat_index,
+        active: p.active,
+        chips: p.chips,
+      })),
+      currentRound.dealerSeatIndex
+    );
 
-    return startGame(nextDealerIndex);
-  }, [currentRound, players]);
+    // Find dealer index
+    const dealerIndex = activePlayers.findIndex((p: any) => p.seat_index === nextDealerSeat);
+    
+    // Clear deck ref for new round
+    deckRef.current = [];
+    
+    return startGame(dealerIndex >= 0 ? dealerIndex : 0);
+  }, [currentRound, lobbyId, players, startGame]);
 
   const endGame = async () => {
     if (!lobbyId) return false;
@@ -583,7 +674,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
         })
         .eq('id', lobbyId);
 
-      if (currentRound && currentRound.stage !== 'settled') {
+      if (currentRound && currentRound.stage !== 'settled' && currentRound.stage !== 'game_finished') {
         await supabase
           .from('game_rounds')
           .update({ stage: 'game_finished' })
@@ -599,7 +690,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
     }
   };
 
-  // Auto-start next round
+  // Auto-start next round when settled (NO NEXT ROUND BUTTON)
   useEffect(() => {
     if (currentRound?.stage === 'settled' && !loading) {
       if (autoNextRoundTimer.current) {
@@ -618,6 +709,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
     };
   }, [currentRound?.stage, loading, startNewRound]);
 
+  // Subscribe to real-time updates
   useEffect(() => {
     if (!lobbyId) return;
 
@@ -635,6 +727,18 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
         },
         () => {
           fetchCurrentRound();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'lobby_players',
+          filter: `lobby_id=eq.${lobbyId}`,
+        },
+        () => {
+          // Refresh when player data changes (chips updated)
         }
       )
       .subscribe();
