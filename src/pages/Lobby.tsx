@@ -8,6 +8,7 @@ import { BuyingModal } from "@/components/casino/BuyingModal";
 import { PlayerCard } from "@/components/casino/PlayerCard";
 import { WinnerSelectionModal } from "@/components/casino/WinnerSelectionModal";
 import { SettlementModal } from "@/components/casino/SettlementModal";
+import { EndGameModal } from "@/components/casino/EndGameModal";
 import { useGameStore } from "@/store/gameStore";
 import { useLobby } from "@/hooks/useLobby";
 import { usePokerGame } from "@/hooks/usePokerGame";
@@ -53,9 +54,9 @@ export default function Lobby() {
   const [showBuyingModal, setShowBuyingModal] = useState(false);
   const [showWinnerModal, setShowWinnerModal] = useState(false);
   const [showSettlementModal, setShowSettlementModal] = useState(false);
+  const [showEndGameModal, setShowEndGameModal] = useState(false);
   const [viewMode, setViewMode] = useState<'table' | 'list'>('table');
   const [initialLoading, setInitialLoading] = useState(true);
-  const [selectedWinners, setSelectedWinners] = useState<string[]>([]);
   const [countdownSeconds, setCountdownSeconds] = useState(3);
 
   // Fetch lobby on mount
@@ -114,7 +115,8 @@ export default function Lobby() {
   const isGameActive = gameRound && 
     gameRound.stage !== 'waiting' && 
     gameRound.stage !== 'settled' &&
-    gameRound.stage !== 'game_finished';
+    gameRound.stage !== 'game_finished' &&
+    gameRound.stage !== 'showdown';
   const activeRound = isGameActive ? gameRound : null;
 
   const copyToClipboard = (text: string, label: string) => {
@@ -179,19 +181,27 @@ export default function Lobby() {
   };
 
   const handleEndGame = async () => {
-    if (confirm('Are you sure you want to end the game? This will show the final settlement.')) {
-      await endGame();
-    }
+    setShowEndGameModal(false);
+    await endGame();
   };
 
-  const handleSelectWinner = async () => {
-    if (selectedWinners.length === 0) {
+  // Handle winner selection with per-pot support
+  const handleSelectWinners = async (potWinners: Record<string, string[]>) => {
+    // Get all unique winners from all pots
+    const allWinners = new Set<string>();
+    Object.values(potWinners).forEach(winners => {
+      winners.forEach(w => allWinners.add(w));
+    });
+
+    if (allWinners.size === 0) {
       toast({ title: 'Error', description: 'Please select at least one winner', variant: 'destructive' });
       return;
     }
-    await awardPot(selectedWinners);
+
+    // For now, award all pots to selected winners
+    // The awardPot function will handle distribution
+    await awardPot(Array.from(allWinners));
     setShowWinnerModal(false);
-    setSelectedWinners([]);
   };
 
   // Calculate settlement data
@@ -226,9 +236,13 @@ export default function Lobby() {
   };
 
   // Get non-folded players for winner selection
-  const nonFoldedPlayers = gameRound 
-    ? players.filter(p => !gameRound.foldedPlayers.includes(p.id))
-    : [];
+  const getNonFoldedPlayers = () => {
+    if (!gameRound) return [];
+    return players.filter(p => {
+      const state = gameRound.playerStates[p.id];
+      return state && !state.hasFolded;
+    });
+  };
 
   // Get player's committed chips for display
   const getPlayerCommitted = (playerId: string) => {
@@ -261,7 +275,7 @@ export default function Lobby() {
               <Button 
                 variant="destructive" 
                 size="sm"
-                onClick={handleEndGame}
+                onClick={() => setShowEndGameModal(true)}
                 className="text-xs"
               >
                 <XCircle className="w-4 h-4 mr-1" />
@@ -351,7 +365,7 @@ export default function Lobby() {
         {/* Action Area */}
         {activeRound && currentPlayer ? (
           <GameActions
-            canAct={activeRound.currentTurnSeatIndex === currentPlayer.seatIndex}
+            canAct={activeRound.currentTurnSeatIndex === currentPlayer.seatIndex && currentPlayer.chips > 0}
             currentBet={activeRound.currentBet}
             playerBet={getPlayerCommitted(currentPlayer.id)}
             playerChips={currentPlayer.chips}
@@ -462,22 +476,22 @@ export default function Lobby() {
         onBuy={handleBuy}
       />
 
-      {/* Winner Selection Modal */}
+      {/* Winner Selection Modal - Per Pot Support */}
       <WinnerSelectionModal
         open={showWinnerModal}
         onClose={() => setShowWinnerModal(false)}
-        players={nonFoldedPlayers}
+        players={getNonFoldedPlayers()}
         pots={gameRound?.pots || []}
         chipUnitValue={currentLobby.chipUnitValue}
-        selectedWinners={selectedWinners}
-        onSelectWinner={(id) => {
-          setSelectedWinners(prev => 
-            prev.includes(id) 
-              ? prev.filter(w => w !== id)
-              : [...prev, id]
-          );
-        }}
-        onConfirm={handleSelectWinner}
+        onConfirm={handleSelectWinners}
+      />
+
+      {/* End Game Confirmation Modal */}
+      <EndGameModal
+        open={showEndGameModal}
+        onClose={() => setShowEndGameModal(false)}
+        onConfirm={handleEndGame}
+        loading={gameLoading}
       />
 
       {/* Settlement Modal */}

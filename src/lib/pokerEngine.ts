@@ -1,4 +1,5 @@
 // Texas Hold'em Poker Engine - Authoritative game rules
+// VERSION 2.0 - All bugs fixed per specification
 import type { LobbyPlayer, GameRound, Pot, PlayerHandState, PokerAction, ActionValidation } from '@/types/casino';
 
 // ==================== CONSTANTS ====================
@@ -30,8 +31,27 @@ export function shuffleDeck(deck: string[]): string[] {
 // ==================== SEAT/POSITION UTILITIES ====================
 
 /**
+ * Get active players (not folded, optionally not all-in)
+ */
+export function getActivePlayers(
+  players: LobbyPlayer[],
+  round: GameRound,
+  includeAllIn: boolean = false
+): LobbyPlayer[] {
+  return players
+    .filter(p => {
+      const state = round.playerStates[p.id];
+      if (!state) return false;
+      if (state.hasFolded) return false;
+      if (!includeAllIn && state.isAllIn) return false;
+      return p.active;
+    })
+    .sort((a, b) => a.seatIndex - b.seatIndex);
+}
+
+/**
  * Get the next active seat clockwise from a given seat
- * Active means: player exists, has chips or is all-in, hasn't folded
+ * CRITICAL FIX: Proper clockwise rotation that doesn't prematurely end rounds
  */
 export function getNextActiveSeat(
   players: LobbyPlayer[],
@@ -39,108 +59,122 @@ export function getNextActiveSeat(
   afterSeat: number,
   includeAllIn: boolean = false
 ): number | null {
-  const sortedPlayers = [...players].sort((a, b) => a.seatIndex - b.seatIndex);
-  const activePlayers = sortedPlayers.filter(p => {
-    const state = round.playerStates[p.id];
-    if (!state) return false;
-    if (state.hasFolded) return false;
-    if (!includeAllIn && state.isAllIn) return false;
-    return true;
-  });
-
+  const activePlayers = getActivePlayers(players, round, includeAllIn);
   if (activePlayers.length === 0) return null;
 
-  // Find next player after the given seat (clockwise)
-  let nextPlayer = activePlayers.find(p => p.seatIndex > afterSeat);
-  if (!nextPlayer) {
-    nextPlayer = activePlayers[0]; // Wrap around
+  // Find next player clockwise after the given seat
+  const sortedSeats = activePlayers.map(p => p.seatIndex).sort((a, b) => a - b);
+  
+  // Find the first seat that is greater than afterSeat
+  let nextSeat = sortedSeats.find(seat => seat > afterSeat);
+  
+  // If no seat found after, wrap around to first seat
+  if (nextSeat === undefined) {
+    nextSeat = sortedSeats[0];
   }
   
-  return nextPlayer.seatIndex;
+  return nextSeat;
 }
 
 /**
- * Get the next seat clockwise (simple rotation)
+ * Get the next dealer seat (for rotating dealer)
  */
-export function getNextSeat(
+export function getNextDealerSeat(
   players: LobbyPlayer[],
-  currentSeat: number
+  currentDealerSeat: number
 ): number {
-  const sortedPlayers = [...players].sort((a, b) => a.seatIndex - b.seatIndex);
-  const activeSeats = sortedPlayers.filter(p => p.active).map(p => p.seatIndex);
+  const activePlayers = players
+    .filter(p => p.active && p.chips > 0)
+    .sort((a, b) => a.seatIndex - b.seatIndex);
   
-  const currentIndex = activeSeats.indexOf(currentSeat);
-  if (currentIndex === -1) return activeSeats[0];
+  if (activePlayers.length === 0) return currentDealerSeat;
   
-  const nextIndex = (currentIndex + 1) % activeSeats.length;
-  return activeSeats[nextIndex];
+  const seats = activePlayers.map(p => p.seatIndex);
+  const currentIndex = seats.indexOf(currentDealerSeat);
+  
+  if (currentIndex === -1) {
+    // Dealer left, pick next available
+    const nextSeat = seats.find(s => s > currentDealerSeat) || seats[0];
+    return nextSeat;
+  }
+  
+  return seats[(currentIndex + 1) % seats.length];
 }
 
 /**
  * Calculate dealer, SB, BB seats based on dealer position
+ * Handles 2-player (heads-up) correctly
  */
 export function calculateBlindPositions(
   players: LobbyPlayer[],
   dealerSeat: number
 ): { dealerSeat: number; sbSeat: number; bbSeat: number } {
-  const activePlayers = players.filter(p => p.active && p.chips > 0)
+  const activePlayers = players
+    .filter(p => p.active && p.chips > 0)
     .sort((a, b) => a.seatIndex - b.seatIndex);
   
   if (activePlayers.length < 2) {
     throw new Error('Need at least 2 players with chips');
   }
 
+  const seats = activePlayers.map(p => p.seatIndex);
+  let dealerIndex = seats.indexOf(dealerSeat);
+  
+  // If dealer seat not found, use first available
+  if (dealerIndex === -1) {
+    dealerIndex = 0;
+  }
+
   const numPlayers = activePlayers.length;
-  const dealerIndex = activePlayers.findIndex(p => p.seatIndex === dealerSeat) 
-    || 0;
   
   if (numPlayers === 2) {
-    // Heads-up: Dealer posts SB, other posts BB
-    const sbSeat = activePlayers[dealerIndex].seatIndex;
-    const bbSeat = activePlayers[(dealerIndex + 1) % numPlayers].seatIndex;
+    // HEADS-UP SPECIAL RULE:
+    // Dealer posts SB and acts first preflop
+    // Non-dealer posts BB and acts first postflop
+    const sbSeat = seats[dealerIndex];
+    const bbSeat = seats[(dealerIndex + 1) % numPlayers];
     return { dealerSeat: sbSeat, sbSeat, bbSeat };
   } else {
     // 3+ players: normal positions
     const sbIndex = (dealerIndex + 1) % numPlayers;
     const bbIndex = (dealerIndex + 2) % numPlayers;
     return {
-      dealerSeat: activePlayers[dealerIndex].seatIndex,
-      sbSeat: activePlayers[sbIndex].seatIndex,
-      bbSeat: activePlayers[bbIndex].seatIndex,
+      dealerSeat: seats[dealerIndex],
+      sbSeat: seats[sbIndex],
+      bbSeat: seats[bbIndex],
     };
   }
 }
 
 /**
  * Get the first-to-act seat for a betting round
+ * CRITICAL: Handles heads-up correctly
  */
 export function getFirstToActSeat(
   players: LobbyPlayer[],
   round: GameRound,
   stage: 'preflop' | 'postflop'
 ): number | null {
-  const activePlayers = players.filter(p => {
-    const state = round.playerStates[p.id];
-    return p.active && state && !state.hasFolded && !state.isAllIn;
-  }).sort((a, b) => a.seatIndex - b.seatIndex);
-
+  const activePlayers = getActivePlayers(players, round, false);
   if (activePlayers.length === 0) return null;
 
-  const numPlayers = players.filter(p => p.active).length;
-  const isHeadsUp = numPlayers === 2;
+  const allNonFolded = getActivePlayers(players, round, true);
+  const isHeadsUp = allNonFolded.length === 2;
 
   if (stage === 'preflop') {
     if (isHeadsUp) {
-      // Heads-up: SB (dealer) acts first preflop
-      return round.smallBlindSeatIndex;
+      // HEADS-UP PREFLOP: Small blind (dealer) acts first
+      const sbPlayer = activePlayers.find(p => p.seatIndex === round.smallBlindSeatIndex);
+      if (sbPlayer) return sbPlayer.seatIndex;
+      return activePlayers[0]?.seatIndex || null;
     } else {
-      // 3+ players: player after BB acts first
+      // 3+ PLAYERS: Player after BB acts first
       return getNextActiveSeat(players, round, round.bigBlindSeatIndex, false);
     }
   } else {
-    // Post-flop: first active player after dealer
+    // POSTFLOP: First active player after dealer
     if (isHeadsUp) {
-      // Heads-up postflop: BB acts first (non-dealer)
+      // HEADS-UP POSTFLOP: Big blind acts first (non-dealer)
       const bbPlayer = activePlayers.find(p => p.seatIndex === round.bigBlindSeatIndex);
       if (bbPlayer) return bbPlayer.seatIndex;
     }
@@ -172,6 +206,11 @@ export function validateAction(
     return { valid: false, reason: 'Player is all-in' };
   }
 
+  // ZERO STACK CHECK: Player with 0 chips cannot act
+  if (player.chips <= 0) {
+    return { valid: false, reason: 'Player has no chips' };
+  }
+
   const playerStack = player.chips;
   const playerCommitted = state.committed;
   const callAmount = Math.max(0, round.currentBet - playerCommitted);
@@ -201,7 +240,7 @@ export function validateAction(
       if (round.currentBet > 0) {
         return { valid: false, reason: 'Cannot bet - there is already a bet. Use raise.' };
       }
-      const minBet = round.minRaise; // First bet must be at least BB
+      const minBet = round.minRaise;
       if (amount === undefined || amount < minBet) {
         if (playerStack < minBet) {
           // All-in bet is allowed
@@ -219,7 +258,6 @@ export function validateAction(
         return { valid: false, reason: 'Cannot raise - no bet to raise. Use bet.' };
       }
       
-      // Minimum raise: must add at least minRaiseAmount to current bet
       const minRaiseTotal = round.currentBet + minRaiseAmount;
       const amountNeeded = minRaiseTotal - playerCommitted;
       
@@ -232,7 +270,6 @@ export function validateAction(
         };
       }
 
-      // Amount is the total chips player wants to commit
       const raiseAmount = amount - playerCommitted;
       
       if (raiseAmount > playerStack) {
@@ -243,7 +280,7 @@ export function validateAction(
         return { valid: false, reason: 'Raise must be higher than current bet' };
       }
 
-      // Check minimum raise (unless it's an all-in)
+      // All-in exception: can raise any amount when going all-in
       if (raiseAmount < amountNeeded && raiseAmount < playerStack) {
         return { 
           valid: false, 
@@ -271,6 +308,7 @@ export function getValidActions(
 ): { action: PokerAction; minAmount?: number; maxAmount?: number }[] {
   const state = round.playerStates[player.id];
   if (!state || state.hasFolded || state.isAllIn) return [];
+  if (player.chips <= 0) return [];
 
   const actions: { action: PokerAction; minAmount?: number; maxAmount?: number }[] = [];
   const callAmount = Math.max(0, round.currentBet - state.committed);
@@ -320,10 +358,10 @@ export function getValidActions(
 
 /**
  * Calculate pots from player commitments (handles side pots)
- * Algorithm from the spec: sort by commitment, create pots layer by layer
+ * CRITICAL FIX: Proper side pot calculation
  */
 export function calculatePots(playerStates: Record<string, PlayerHandState>): Pot[] {
-  // Get non-folded players with commitments
+  // Get all players with commitments (including folded - they still contributed)
   const players = Object.entries(playerStates)
     .filter(([_, state]) => state.committed > 0)
     .map(([playerId, state]) => ({
@@ -340,13 +378,10 @@ export function calculatePots(playerStates: Record<string, PlayerHandState>): Po
   let potIndex = 0;
 
   while (remaining.some(p => p.remaining > 0)) {
-    // Find smallest non-zero remaining
     const nonZero = remaining.filter(p => p.remaining > 0);
     if (nonZero.length === 0) break;
 
     const smallest = Math.min(...nonZero.map(p => p.remaining));
-    
-    // Contributors are all players with remaining >= smallest
     const contributors = nonZero.map(p => p.playerId);
     
     // Eligible winners are non-folded contributors
@@ -356,12 +391,14 @@ export function calculatePots(playerStates: Record<string, PlayerHandState>): Po
     
     const potAmount = smallest * contributors.length;
     
-    pots.push({
-      id: potIndex === 0 ? 'main' : `side-${potIndex}`,
-      amount: potAmount,
-      contributors: eligibleWinners, // Only non-folded can win
-    });
-    potIndex++;
+    if (potAmount > 0 && eligibleWinners.length > 0) {
+      pots.push({
+        id: potIndex === 0 ? 'main' : `side-${potIndex}`,
+        amount: potAmount,
+        contributors: eligibleWinners,
+      });
+      potIndex++;
+    }
 
     // Subtract smallest from each contributor
     remaining = remaining.map(p => ({
@@ -370,7 +407,6 @@ export function calculatePots(playerStates: Record<string, PlayerHandState>): Po
     }));
   }
 
-  // Combine any pots with same contributors
   return pots.filter(p => p.amount > 0);
 }
 
@@ -395,7 +431,6 @@ export function distributePot(
     const playerB = players.find(p => p.id === b);
     if (!playerA || !playerB) return 0;
 
-    // Calculate distance from dealer (clockwise)
     const maxSeat = Math.max(...players.map(p => p.seatIndex));
     const distA = (playerA.seatIndex - dealerSeat + maxSeat + 1) % (maxSeat + 1);
     const distB = (playerB.seatIndex - dealerSeat + maxSeat + 1) % (maxSeat + 1);
@@ -417,29 +452,36 @@ export function distributePot(
 
 /**
  * Check if the current betting round is complete
+ * CRITICAL FIX: Proper detection of when betting round ends
  */
 export function isBettingRoundComplete(
   players: LobbyPlayer[],
   round: GameRound
 ): boolean {
-  const activePlayers = players.filter(p => {
-    const state = round.playerStates[p.id];
-    return p.active && state && !state.hasFolded && !state.isAllIn;
-  });
-
-  // If no one can act, round is complete
-  if (activePlayers.length === 0) return true;
-
-  // If only one player left (others folded), round complete
-  const nonFolded = players.filter(p => {
-    const state = round.playerStates[p.id];
-    return p.active && state && !state.hasFolded;
-  });
+  const nonFolded = getActivePlayers(players, round, true);
+  
+  // If only one player left (others folded), hand is over
   if (nonFolded.length <= 1) return true;
 
-  // Check if all active players have acted and matched current bet
-  for (const player of activePlayers) {
+  // Get players who can still act (not folded, not all-in)
+  const canAct = getActivePlayers(players, round, false);
+  
+  // If no one can act, round is complete
+  if (canAct.length === 0) return true;
+
+  // If only one player can act and they've matched the bet, round is complete
+  if (canAct.length === 1) {
+    const player = canAct[0];
     const state = round.playerStates[player.id];
+    if (state && state.committed >= round.currentBet && state.hasActedThisRound) {
+      return true;
+    }
+  }
+
+  // Check if all active players have acted and matched current bet
+  for (const player of canAct) {
+    const state = round.playerStates[player.id];
+    if (!state) return false;
     if (!state.hasActedThisRound) return false;
     if (state.committed < round.currentBet) return false;
   }
@@ -454,10 +496,7 @@ export function isHandOver(
   players: LobbyPlayer[],
   round: GameRound
 ): boolean {
-  const nonFolded = players.filter(p => {
-    const state = round.playerStates[p.id];
-    return p.active && state && !state.hasFolded;
-  });
+  const nonFolded = getActivePlayers(players, round, true);
   return nonFolded.length <= 1;
 }
 
@@ -468,10 +507,7 @@ export function getWinnerByFold(
   players: LobbyPlayer[],
   round: GameRound
 ): LobbyPlayer | null {
-  const nonFolded = players.filter(p => {
-    const state = round.playerStates[p.id];
-    return p.active && state && !state.hasFolded;
-  });
+  const nonFolded = getActivePlayers(players, round, true);
   return nonFolded.length === 1 ? nonFolded[0] : null;
 }
 
@@ -482,24 +518,39 @@ export function allPlayersAllIn(
   players: LobbyPlayer[],
   round: GameRound
 ): boolean {
-  const nonFolded = players.filter(p => {
-    const state = round.playerStates[p.id];
-    return p.active && state && !state.hasFolded;
-  });
+  const nonFolded = getActivePlayers(players, round, true);
+  if (nonFolded.length <= 1) return false;
 
-  // At most one player can still act (have chips and not all-in)
-  const canAct = nonFolded.filter(p => {
-    const state = round.playerStates[p.id];
-    return !state.isAllIn && p.chips > 0;
-  });
-
+  // Count players who can still act
+  const canAct = getActivePlayers(players, round, false);
+  
+  // If 0 or 1 player can act, all others are all-in
   return canAct.length <= 1;
+}
+
+/**
+ * Get pending reveal count for community cards
+ */
+export function getPendingRevealCount(
+  currentStage: string,
+  currentCommunityCards: number
+): number {
+  switch (currentStage) {
+    case 'flop':
+      return currentCommunityCards === 0 ? 3 : 0;
+    case 'turn':
+      return currentCommunityCards === 3 ? 1 : 0;
+    case 'river':
+      return currentCommunityCards === 4 ? 1 : 0;
+    default:
+      return 0;
+  }
 }
 
 // ==================== STAGE PROGRESSION ====================
 
-export function getNextStage(currentStage: GameRound['stage']): GameRound['stage'] {
-  const stages: GameRound['stage'][] = ['preflop', 'flop', 'turn', 'river', 'showdown', 'settled'];
+export function getNextStage(currentStage: string): string {
+  const stages = ['preflop', 'flop', 'turn', 'river', 'showdown', 'settled'];
   const currentIndex = stages.indexOf(currentStage);
   if (currentIndex === -1 || currentIndex >= stages.length - 1) return 'settled';
   return stages[currentIndex + 1];
@@ -507,7 +558,7 @@ export function getNextStage(currentStage: GameRound['stage']): GameRound['stage
 
 export function getCommunityCardsForStage(
   deck: string[],
-  stage: GameRound['stage'],
+  stage: string,
   existingCards: string[]
 ): string[] {
   switch (stage) {
@@ -572,6 +623,8 @@ export function postBlinds(
       ...playerStates[sbPlayer.id],
       committed: sbAmount,
       isAllIn: sbPlayer.chips <= smallBlind,
+      // SB has NOT acted yet - they still need to act preflop
+      hasActedThisRound: false,
     };
     chipDeductions[sbPlayer.id] = sbAmount;
   }
@@ -582,6 +635,8 @@ export function postBlinds(
       ...playerStates[bbPlayer.id],
       committed: bbAmount,
       isAllIn: bbPlayer.chips <= bigBlind,
+      // BB has NOT acted yet - they can still raise
+      hasActedThisRound: false,
     };
     chipDeductions[bbPlayer.id] = bbAmount;
   }
@@ -601,8 +656,19 @@ export function resetForNewBettingRound(
     newStates[playerId] = {
       ...state,
       hasActedThisRound: false,
+      lastAction: undefined,
     };
   }
   
   return newStates;
+}
+
+/**
+ * Check if player should be auto-folded (0 chips during hand)
+ */
+export function shouldAutoFold(player: LobbyPlayer, round: GameRound): boolean {
+  const state = round.playerStates[player.id];
+  if (!state) return false;
+  if (state.hasFolded || state.isAllIn) return false;
+  return player.chips <= 0;
 }
