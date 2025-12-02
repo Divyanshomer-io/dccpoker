@@ -42,15 +42,26 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
 
   const parseRoundFromDB = useCallback((data: any): GameRound => {
     const rawPlayerStates = data.player_states as Record<string, any> | null;
+    const foldedPlayers = (data.folded_players as string[]) || [];
+    const allInPlayers = (data.all_in_players as string[]) || [];
+    const playerBets = (data.player_bets as Record<string, number>) || {};
+
     let playerStates: Record<string, PlayerHandState> = {};
     
     if (rawPlayerStates && Object.keys(rawPlayerStates).length > 0) {
-      playerStates = rawPlayerStates as Record<string, PlayerHandState>;
+      // Start from persisted states
+      playerStates = { ...rawPlayerStates } as Record<string, PlayerHandState>;
+
+      // CRITICAL: Always sync hasFolded / isAllIn flags from arrays
+      for (const [playerId, state] of Object.entries(playerStates)) {
+        playerStates[playerId] = {
+          ...state,
+          hasFolded: foldedPlayers.includes(playerId),
+          isAllIn: allInPlayers.includes(playerId),
+        };
+      }
     } else {
-      const foldedPlayers = (data.folded_players as string[]) || [];
-      const allInPlayers = (data.all_in_players as string[]) || [];
-      const playerBets = (data.player_bets as Record<string, number>) || {};
-      
+      // Derive states from bets + folded/all-in arrays
       for (const playerId of Object.keys(playerBets)) {
         playerStates[playerId] = {
           playerId,
@@ -447,14 +458,13 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
         const winner = getWinnerByFold(players, updatedRound);
         if (winner) {
           const potTotal = updatedRound.pots.reduce((sum, pot) => sum + pot.amount, 0);
-          
-          // CRITICAL FIX: Award pot to winner immediately
+
+          // Award entire pot to winner by adding to their current stack
           const winnerPlayer = players.find(p => p.id === winner.id);
           if (winnerPlayer) {
-            const newChips = winnerPlayer.chips - chipsToDeduct + potTotal;
             await supabase
               .from('lobby_players')
-              .update({ chips: newChips >= 0 ? newChips : winnerPlayer.chips + potTotal })
+              .update({ chips: winnerPlayer.chips + potTotal })
               .eq('id', winner.id);
           }
 
