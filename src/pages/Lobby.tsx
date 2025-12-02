@@ -89,10 +89,10 @@ export default function Lobby() {
 
   // Show settlement modal when game ends
   useEffect(() => {
-    if (currentLobby?.status === 'game_finished') {
+    if (currentLobby?.status === 'game_finished' || gameRound?.stage === 'game_finished') {
       setShowSettlementModal(true);
     }
-  }, [currentLobby?.status]);
+  }, [currentLobby?.status, gameRound?.stage]);
 
   if (initialLoading) {
     return (
@@ -119,6 +119,18 @@ export default function Lobby() {
     gameRound.stage !== 'showdown';
   const activeRound = isGameActive ? gameRound : null;
 
+  const currentPlayerState =
+    currentPlayer && gameRound?.playerStates
+      ? gameRound.playerStates[currentPlayer.id]
+      : undefined;
+
+  const canCurrentPlayerAct =
+    !!activeRound &&
+    !!currentPlayer &&
+    activeRound.currentTurnSeatIndex === currentPlayer.seatIndex &&
+    currentPlayer.chips > 0 &&
+    !currentPlayerState?.hasFolded &&
+    !currentPlayerState?.isAllIn;
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     toast({ title: "Copied!", description: `${label} copied to clipboard` });
@@ -365,7 +377,7 @@ export default function Lobby() {
         {/* Action Area */}
         {activeRound && currentPlayer ? (
           <GameActions
-            canAct={activeRound.currentTurnSeatIndex === currentPlayer.seatIndex && currentPlayer.chips > 0}
+            canAct={canCurrentPlayerAct}
             currentBet={activeRound.currentBet}
             playerBet={getPlayerCommitted(currentPlayer.id)}
             playerChips={currentPlayer.chips}
