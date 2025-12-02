@@ -236,11 +236,11 @@ export default function Lobby() {
   };
 
   // Get non-folded players for winner selection
-  const getNonFoldedPlayers = () => {
+  const getNonFoldedPlayersForSelection = () => {
     if (!gameRound) return [];
     return players.filter(p => {
       const state = gameRound.playerStates[p.id];
-      return state && !state.hasFolded;
+      return state && !state.hasFolded && p.active;
     });
   };
 
@@ -480,7 +480,7 @@ export default function Lobby() {
       <WinnerSelectionModal
         open={showWinnerModal}
         onClose={() => setShowWinnerModal(false)}
-        players={getNonFoldedPlayers()}
+        players={getNonFoldedPlayersForSelection()}
         pots={gameRound?.pots || []}
         chipUnitValue={currentLobby.chipUnitValue}
         onConfirm={handleSelectWinners}

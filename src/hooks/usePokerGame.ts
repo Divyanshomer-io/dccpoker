@@ -8,7 +8,7 @@ import {
   shuffleDeck,
   calculateBlindPositions,
   getFirstToActSeat,
-  getNextActiveSeat,
+  findNextEligibleSeat,
   getNextDealerSeat,
   validateAction,
   calculatePots,
@@ -21,8 +21,8 @@ import {
   initializePlayerStates,
   postBlinds,
   resetForNewBettingRound,
-  getActivePlayers,
-  shouldAutoFold,
+  getEligiblePlayers,
+  getNonFoldedPlayers,
 } from '@/lib/pokerEngine';
 
 interface UsePokerGameProps {
@@ -242,13 +242,28 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
     const currentPlayer = players.find(p => p.userId === currentUser.id);
     if (!currentPlayer) return false;
 
+    // CRITICAL: Verify it's player's turn
     if (currentRound.currentTurnSeatIndex !== currentPlayer.seatIndex) {
       toast({ title: 'Not your turn!', variant: 'destructive' });
       return false;
     }
 
-    // Check if player should be auto-folded (0 chips)
-    if (shouldAutoFold(currentPlayer, currentRound)) {
+    const playerState = currentRound.playerStates[currentPlayer.id];
+    
+    // CRITICAL: Cannot act if folded
+    if (playerState?.hasFolded) {
+      toast({ title: 'You have folded', variant: 'destructive' });
+      return false;
+    }
+
+    // CRITICAL: Cannot act if all-in
+    if (playerState?.isAllIn) {
+      toast({ title: 'You are all-in', variant: 'destructive' });
+      return false;
+    }
+
+    // CRITICAL: Cannot act with 0 chips
+    if (currentPlayer.chips <= 0) {
       toast({ title: 'You need chips to play', description: 'Buy chips to continue', variant: 'destructive' });
       return false;
     }
@@ -447,12 +462,11 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           toast({ title: `${winner.user.name} wins!`, description: `Won ${potTotal.toLocaleString()} chips` });
         }
       } else if (isBettingRoundComplete(players, updatedRound)) {
-        // Betting round complete - advance to next stage
+        // CRITICAL: Betting round complete - advance to next stage
         if (allPlayersAllIn(players, updatedRound)) {
-          // All players all-in - go straight to showdown and reveal all cards
+          // All players all-in - go to showdown and reveal all cards
           updatedRound.stage = 'showdown';
           
-          // Use stored deck or create new one
           if (deckRef.current.length === 0) {
             deckRef.current = shuffleDeck(createDeck());
           }
@@ -474,10 +488,10 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           updatedRound.lastRaiseAmount = minBlind * 2;
           updatedRound.lastAggressorSeat = undefined;
 
-          // Reset hasActedThisRound for new betting round
+          // CRITICAL: Reset hasActedThisRound for new betting round
           updatedRound.playerStates = resetForNewBettingRound(updatedStates);
 
-          // Deal community cards based on stage
+          // Deal community cards
           if (deckRef.current.length === 0) {
             deckRef.current = shuffleDeck(createDeck());
           }
@@ -491,7 +505,7 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           } else if (nextStage === 'river') {
             updatedRound.communityCards = [...updatedRound.communityCards, deck[startIndex + 4]];
           } else if (nextStage === 'showdown') {
-            // showdown - no more cards to deal, host will select winner
+            // Showdown - host selects winner
           }
 
           // Set first to act for new betting round
@@ -503,10 +517,14 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           }
         }
       } else {
-        // Continue betting round - advance to next player
-        const nextSeat = getNextActiveSeat(players, updatedRound, currentPlayer.seatIndex, false);
+        // CRITICAL: Continue betting - find next eligible player (not folded, not all-in)
+        const nextSeat = findNextEligibleSeat(players, updatedRound, currentPlayer.seatIndex);
         if (nextSeat !== null) {
           updatedRound.currentTurnSeatIndex = nextSeat;
+        } else {
+          // No eligible players left - end betting round
+          const nextStage = getNextStage(updatedRound.stage);
+          updatedRound.stage = nextStage as GameStage;
         }
       }
 
@@ -666,6 +684,34 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
     if (!lobbyId) return false;
 
     try {
+      // CRITICAL: If round is not settled, handle unsettled pots
+      if (currentRound && currentRound.stage !== 'settled' && currentRound.stage !== 'game_finished') {
+        // Award any remaining pots to non-folded players
+        const nonFolded = getNonFoldedPlayers(players, currentRound);
+        if (nonFolded.length > 0 && currentRound.pots.length > 0) {
+          // Award all pots to remaining players
+          const totalPot = currentRound.pots.reduce((sum, pot) => sum + pot.amount, 0);
+          const sharePerPlayer = Math.floor(totalPot / nonFolded.length);
+          const remainder = totalPot % nonFolded.length;
+
+          for (let i = 0; i < nonFolded.length; i++) {
+            const player = nonFolded[i];
+            const chips = sharePerPlayer + (i < remainder ? 1 : 0);
+            await supabase
+              .from('lobby_players')
+              .update({ chips: player.chips + chips })
+              .eq('id', player.id);
+          }
+        }
+
+        // Mark round as finished
+        await supabase
+          .from('game_rounds')
+          .update({ stage: 'game_finished' })
+          .eq('id', currentRound.id);
+      }
+
+      // End the lobby
       await supabase
         .from('lobbies')
         .update({ 
@@ -673,13 +719,6 @@ export function usePokerGame({ lobbyId, players, minBlind }: UsePokerGameProps) 
           ended_at: new Date().toISOString()
         })
         .eq('id', lobbyId);
-
-      if (currentRound && currentRound.stage !== 'settled' && currentRound.stage !== 'game_finished') {
-        await supabase
-          .from('game_rounds')
-          .update({ stage: 'game_finished' })
-          .eq('id', currentRound.id);
-      }
 
       toast({ title: 'Game Ended', description: 'Final settlement is ready' });
       await fetchCurrentRound();
