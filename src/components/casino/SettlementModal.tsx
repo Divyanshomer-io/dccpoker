@@ -1,8 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { TrendingUp, TrendingDown, Minus, Trophy } from "lucide-react";
-import type { Settlement } from "@/types/casino";
+import { TrendingUp, TrendingDown, Minus, Trophy, Download } from "lucide-react";
+import type { Settlement, Transfer } from "@/types/casino";
 
 interface SettlementModalProps {
   open: boolean;
@@ -23,6 +23,73 @@ export function SettlementModal({
       currency: currencyCode || 'INR',
       minimumFractionDigits: 2,
     }).format(amount);
+  };
+
+  // Calculate minimal transfer pairs (greedy algorithm)
+  const calculateTransfers = (): Transfer[] => {
+    const transfers: Transfer[] = [];
+    
+    // Create copies of balances
+    const balances = entries.map(e => ({
+      playerId: e.playerId,
+      playerName: e.playerName,
+      balance: e.netChange,
+    }));
+
+    // Sort: debtors (negative) first, then creditors (positive)
+    const debtors = balances.filter(b => b.balance < 0).sort((a, b) => a.balance - b.balance);
+    const creditors = balances.filter(b => b.balance > 0).sort((a, b) => b.balance - a.balance);
+
+    let i = 0, j = 0;
+    while (i < debtors.length && j < creditors.length) {
+      const debtor = debtors[i];
+      const creditor = creditors[j];
+      
+      const amount = Math.min(Math.abs(debtor.balance), creditor.balance);
+      
+      if (amount > 0.01) {
+        transfers.push({
+          from: debtor.playerId,
+          fromName: debtor.playerName,
+          to: creditor.playerId,
+          toName: creditor.playerName,
+          amount,
+        });
+      }
+      
+      debtor.balance += amount;
+      creditor.balance -= amount;
+      
+      if (Math.abs(debtor.balance) < 0.01) i++;
+      if (creditor.balance < 0.01) j++;
+    }
+
+    return transfers;
+  };
+
+  const transfers = calculateTransfers();
+
+  // Download CSV
+  const downloadCSV = () => {
+    const headers = ['Player', 'Starting Chips', 'Final Chips', 'Chip Change', 'Starting Money', 'Final Money', 'Net P/L'];
+    const rows = entries.map(e => [
+      e.playerName,
+      e.startingChips,
+      e.finalChips,
+      e.finalChips - e.startingChips,
+      e.startingMoney.toFixed(2),
+      e.finalMoney.toFixed(2),
+      e.netChange.toFixed(2),
+    ]);
+
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `poker-settlement-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -48,6 +115,7 @@ export function SettlementModal({
               const isWinner = entry.netChange > 0;
               const isLoser = entry.netChange < 0;
               const isEven = entry.netChange === 0;
+              const chipChange = entry.finalChips - entry.startingChips;
 
               return (
                 <div
@@ -68,7 +136,7 @@ export function SettlementModal({
                     <div>
                       <p className="font-medium text-sm">{entry.playerName}</p>
                       <div className="flex gap-2 text-xs text-muted-foreground">
-                        <span>{entry.startingChips.toLocaleString()} → {entry.finalChips.toLocaleString()}</span>
+                        <span>{entry.startingChips.toLocaleString()} → {entry.finalChips.toLocaleString()} chips</span>
                       </div>
                     </div>
                   </div>
@@ -89,9 +157,14 @@ export function SettlementModal({
                         {formatMoney(entry.netChange)}
                       </span>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      {isWinner && '+'}
-                      {(entry.finalChips - entry.startingChips).toLocaleString()} chips
+                    <p className={cn(
+                      "text-xs",
+                      isWinner && "text-emerald/70",
+                      isLoser && "text-destructive/70",
+                      isEven && "text-muted-foreground"
+                    )}>
+                      {chipChange > 0 && '+'}
+                      {chipChange.toLocaleString()} chips
                     </p>
                   </div>
                 </div>
@@ -107,33 +180,48 @@ export function SettlementModal({
           </div>
 
           {/* Settlement Instructions */}
-          <div className="text-xs text-muted-foreground space-y-1">
-            <p className="font-medium">Settlement Instructions:</p>
-            <ul className="list-disc list-inside space-y-1">
-              {entries.filter(e => e.netChange < 0).map(loser => {
-                const winners = entries.filter(e => e.netChange > 0);
-                return winners.map(winner => {
-                  const proportion = winner.netChange / entries.filter(e => e.netChange > 0).reduce((sum, w) => sum + w.netChange, 0);
-                  const owes = Math.abs(loser.netChange) * proportion;
-                  if (owes > 0.01) {
-                    return (
-                      <li key={`${loser.playerId}-${winner.playerId}`}>
-                        {loser.playerName} pays {winner.playerName}: {formatMoney(owes)}
-                      </li>
-                    );
-                  }
-                  return null;
-                });
-              })}
-            </ul>
-          </div>
+          {transfers.length > 0 && (
+            <div className="bg-card border rounded-lg p-4 space-y-3">
+              <p className="font-medium text-sm flex items-center gap-2">
+                💸 Settlement Transfers
+              </p>
+              <div className="space-y-2">
+                {transfers.map((transfer, idx) => (
+                  <div 
+                    key={idx}
+                    className="flex items-center justify-between text-sm p-2 bg-muted/50 rounded"
+                  >
+                    <span className="text-destructive">{transfer.fromName}</span>
+                    <span className="text-muted-foreground">→</span>
+                    <span className="text-emerald">{transfer.toName}</span>
+                    <span className="font-bold">{formatMoney(transfer.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {transfers.length === 0 && entries.every(e => e.netChange === 0) && (
+            <div className="bg-muted rounded-lg p-3 text-center">
+              <p className="text-sm text-muted-foreground">No transfers needed - everyone broke even!</p>
+            </div>
+          )}
         </div>
 
-        <DialogFooter>
-          <Button variant="gold" className="w-full" onClick={onClose}>
+        <DialogFooter className="gap-2 flex-col sm:flex-row">
+          <Button variant="outline" onClick={downloadCSV} className="gap-2">
+            <Download className="w-4 h-4" />
+            Download CSV
+          </Button>
+          <Button variant="gold" className="flex-1" onClick={onClose}>
             Close Game
           </Button>
         </DialogFooter>
+
+        {/* Attribution */}
+        <p className="text-xs text-center text-muted-foreground mt-2">
+          Created by Divyanshu Lila
+        </p>
       </DialogContent>
     </Dialog>
   );
