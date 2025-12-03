@@ -573,9 +573,41 @@ export function resetForNewBettingRound(
   return newStates;
 }
 
+/**
+ * Get next stage - now uses awaiting stages for host-controlled reveal
+ */
 export function getNextStage(currentStage: string): string {
-  const stages = ['preflop', 'flop', 'turn', 'river', 'showdown', 'settled'];
-  const idx = stages.indexOf(currentStage);
-  if (idx === -1 || idx >= stages.length - 1) return 'settled';
-  return stages[idx + 1];
+  // Preflop -> awaiting_flop (host reveals flop)
+  // awaiting_flop -> flop (betting)
+  // flop -> awaiting_turn (host reveals turn)
+  // etc.
+  const stageMap: Record<string, string> = {
+    'preflop': 'awaiting_flop',
+    'awaiting_flop': 'flop',
+    'flop': 'awaiting_turn',
+    'awaiting_turn': 'turn',
+    'turn': 'awaiting_river',
+    'awaiting_river': 'river',
+    'river': 'showdown',
+    'showdown': 'settled',
+    'settled': 'settled',
+  };
+  return stageMap[currentStage] || 'settled';
+}
+
+/**
+ * Check if stage is an awaiting stage (host needs to reveal cards)
+ */
+export function isAwaitingStage(stage: string): boolean {
+  return stage === 'awaiting_flop' || stage === 'awaiting_turn' || stage === 'awaiting_river';
+}
+
+/**
+ * Get the number of community cards to reveal for a given awaiting stage
+ */
+export function getCardsToReveal(stage: string): number {
+  if (stage === 'awaiting_flop') return 3;
+  if (stage === 'awaiting_turn') return 1;
+  if (stage === 'awaiting_river') return 1;
+  return 0;
 }

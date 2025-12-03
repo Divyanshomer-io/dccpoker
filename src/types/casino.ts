@@ -48,8 +48,11 @@ export interface LobbyPlayer {
 export type GameStage = 
   | 'waiting' 
   | 'preflop' 
+  | 'awaiting_flop'
   | 'flop' 
+  | 'awaiting_turn'
   | 'turn' 
+  | 'awaiting_river'
   | 'river' 
   | 'showdown' 
   | 'settled'
