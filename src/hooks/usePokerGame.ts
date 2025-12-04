@@ -493,6 +493,8 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
         }
       } else if (isBettingRoundComplete(players, updatedRound)) {
         // Betting round complete - check if all-in runout or normal progression
+        console.log('[POKER] Betting round complete, advancing stage from:', updatedRound.stage);
+        
         if (allPlayersAllIn(players, updatedRound)) {
           // All players all-in - go directly to showdown, reveal all cards
           updatedRound.stage = 'showdown';
@@ -507,24 +509,27 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
           if (updatedRound.communityCards.length < 5) {
             updatedRound.communityCards = deck.slice(startIndex, startIndex + 5);
           }
+          console.log('[POKER] All players all-in, going to showdown');
         } else {
           // Normal progression - go to awaiting stage for host to reveal
           const nextStage = getNextStage(updatedRound.stage);
           updatedRound.stage = nextStage as GameStage;
           
-          // Reset for new betting round
-          updatedRound.currentBet = 0;
-          updatedRound.lastRaiseAmount = minBlind * 2;
-          updatedRound.lastAggressorSeat = undefined;
-          updatedRound.playerStates = resetForNewBettingRound(updatedStates);
+          // Don't reset betting yet - that happens when host reveals cards
+          // Just mark that no one should act during awaiting stage
+          console.log('[POKER] Advancing to awaiting stage:', nextStage);
         }
       } else {
         // Continue betting - find next eligible player
         const nextSeat = findNextEligibleSeat(players, updatedRound, currentPlayer.seatIndex);
+        console.log('[POKER] Continuing betting, next seat:', nextSeat);
+        
         if (nextSeat !== null) {
           updatedRound.currentTurnSeatIndex = nextSeat;
         } else {
-          // No eligible players - advance stage
+          // No eligible players found - this means round should be complete
+          // Force advance to next stage
+          console.log('[POKER] No eligible seat found, forcing stage advance');
           const nextStage = getNextStage(updatedRound.stage);
           updatedRound.stage = nextStage as GameStage;
         }

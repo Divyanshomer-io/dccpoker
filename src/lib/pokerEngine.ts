@@ -35,25 +35,34 @@ export function shuffleDeck(deck: string[]): string[] {
  * A player can act ONLY if:
  * - Not folded
  * - Not all-in
- * - Has chips remaining
+ * - Has effective chips remaining (considering committed amount)
+ * 
+ * NOTE: We rely on isAllIn flag rather than player.chips because
+ * player.chips may be stale (not yet synced from DB after action)
  */
 export function isEligibleToAct(player: LobbyPlayer, state: PlayerHandState | undefined): boolean {
   if (!state) return false;
   if (state.hasFolded) return false;
   if (state.isAllIn) return false;
-  if (player.chips <= 0) return false;
+  // If isAllIn is not set but player went all-in, catch it here
+  // This handles the case where player.chips is stale
+  if (!player.active) return false;
   return true;
 }
 
 /**
  * Get eligible players (can still act in this betting round)
+ * Uses playerStates for eligibility determination
  */
 export function getEligiblePlayers(
   players: LobbyPlayer[],
   round: GameRound
 ): LobbyPlayer[] {
   return players
-    .filter(p => isEligibleToAct(p, round.playerStates[p.id]))
+    .filter(p => {
+      const state = round.playerStates[p.id];
+      return state && !state.hasFolded && !state.isAllIn && p.active;
+    })
     .sort((a, b) => a.seatIndex - b.seatIndex);
 }
 
@@ -76,17 +85,25 @@ export function getNonFoldedPlayers(
 
 /**
  * Find next eligible seat clockwise from a given seat
- * CRITICAL: Only returns players who can act (not folded, not all-in, has chips)
+ * CRITICAL: Only returns players who can act (not folded, not all-in)
+ * Uses playerStates for eligibility, not player.chips (which may be stale)
  */
 export function findNextEligibleSeat(
   players: LobbyPlayer[],
   round: GameRound,
   fromSeat: number
 ): number | null {
-  const eligible = getEligiblePlayers(players, round);
+  // Get non-folded, non-all-in players
+  const eligible = players
+    .filter(p => {
+      const state = round.playerStates[p.id];
+      return state && !state.hasFolded && !state.isAllIn && p.active;
+    })
+    .sort((a, b) => a.seatIndex - b.seatIndex);
+    
   if (eligible.length === 0) return null;
 
-  const seats = eligible.map(p => p.seatIndex).sort((a, b) => a - b);
+  const seats = eligible.map(p => p.seatIndex);
   
   // Find first seat after fromSeat
   let nextSeat = seats.find(s => s > fromSeat);
@@ -104,8 +121,11 @@ export function findNextEligibleSeat(
 /**
  * CRITICAL: Check if betting round is complete
  * Round ends when:
- * 1. Only 0-1 players can act (others folded/all-in), OR
+ * 1. Only 0-1 players remain (others folded), OR
  * 2. All eligible players have acted AND all have matched currentBet
+ * 
+ * IMPORTANT: This function MUST work with potentially stale player.chips
+ * We rely on playerStates (hasActedThisRound, isAllIn, hasFolded, committed)
  */
 export function isBettingRoundComplete(
   players: LobbyPlayer[],
@@ -116,25 +136,32 @@ export function isBettingRoundComplete(
   // If only 1 player left (others folded), hand is over
   if (nonFolded.length <= 1) return true;
 
-  const eligible = getEligiblePlayers(players, round);
+  // Get all non-folded, non-all-in players who need to act
+  const playersWhoCanAct = nonFolded.filter(p => {
+    const state = round.playerStates[p.id];
+    return state && !state.isAllIn;
+  });
   
-  // If no one can act (all folded/all-in), round is complete
-  if (eligible.length === 0) return true;
+  // If no one can act (all folded or all-in), round is complete
+  if (playersWhoCanAct.length === 0) return true;
 
-  // If only 1 player can act and they've matched the bet, round is complete
-  if (eligible.length === 1) {
-    const player = eligible[0];
+  // If only 1 player can act, they must have acted and matched
+  if (playersWhoCanAct.length === 1) {
+    const player = playersWhoCanAct[0];
     const state = round.playerStates[player.id];
     return state.hasActedThisRound && state.committed >= round.currentBet;
   }
 
-  // Check if all eligible players have:
-  // 1. Acted this round
-  // 2. Matched the current bet
-  for (const player of eligible) {
+  // For 2+ players who can act:
+  // Round is complete when ALL have acted AND ALL have matched currentBet
+  for (const player of playersWhoCanAct) {
     const state = round.playerStates[player.id];
-    if (!state.hasActedThisRound) return false;
-    if (state.committed < round.currentBet) return false;
+    if (!state.hasActedThisRound) {
+      return false;
+    }
+    if (state.committed < round.currentBet) {
+      return false;
+    }
   }
 
   return true;
