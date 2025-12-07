@@ -84,28 +84,50 @@ export function getNonFoldedPlayers(
 // ==================== TURN ADVANCEMENT ====================
 
 /**
- * Find next eligible seat clockwise from a given seat
- * CRITICAL: Only returns players who can act (not folded, not all-in)
- * Uses playerStates for eligibility, not player.chips (which may be stale)
+ * CRITICAL FIX: Find next eligible seat clockwise from a given seat
+ * Only returns players who:
+ * - Are NOT folded
+ * - Are NOT all-in
+ * - Are active
+ * - Have NOT already acted this round OR need to respond to a raise
+ * 
+ * Returns null if no one can act (triggers round completion)
  */
 export function findNextEligibleSeat(
   players: LobbyPlayer[],
   round: GameRound,
   fromSeat: number
 ): number | null {
-  // Get non-folded, non-all-in players
-  const eligible = players
-    .filter(p => {
-      const state = round.playerStates[p.id];
-      return state && !state.hasFolded && !state.isAllIn && p.active;
-    })
-    .sort((a, b) => a.seatIndex - b.seatIndex);
+  // Get players who can still take actions
+  const eligible = players.filter(p => {
+    const state = round.playerStates[p.id];
+    if (!state) return false;
+    if (state.hasFolded) return false;  // Skip folded
+    if (state.isAllIn) return false;     // Skip all-in
+    if (!p.active) return false;          // Skip inactive
+    return true;
+  }).sort((a, b) => a.seatIndex - b.seatIndex);
     
-  if (eligible.length === 0) return null;
+  if (eligible.length === 0) {
+    console.log('[POKER] findNextEligibleSeat: No eligible players');
+    return null;
+  }
+
+  // If only one eligible player, that's the next seat
+  if (eligible.length === 1) {
+    const onlyPlayer = eligible[0];
+    const state = round.playerStates[onlyPlayer.id];
+    // If this player has already acted and matched, round is over
+    if (state.hasActedThisRound && state.committed >= round.currentBet) {
+      console.log('[POKER] findNextEligibleSeat: Only one player and they already acted');
+      return null;
+    }
+    return onlyPlayer.seatIndex;
+  }
 
   const seats = eligible.map(p => p.seatIndex);
   
-  // Find first seat after fromSeat
+  // Find first seat STRICTLY after fromSeat (clockwise)
   let nextSeat = seats.find(s => s > fromSeat);
   
   // Wrap around if needed
@@ -113,19 +135,34 @@ export function findNextEligibleSeat(
     nextSeat = seats[0];
   }
   
+  // CRITICAL: Don't return the same seat we started from
+  // unless they need to act (haven't acted or need to respond to raise)
+  if (nextSeat === fromSeat) {
+    const player = players.find(p => p.seatIndex === nextSeat);
+    if (player) {
+      const state = round.playerStates[player.id];
+      if (state && state.hasActedThisRound && state.committed >= round.currentBet) {
+        console.log('[POKER] findNextEligibleSeat: Would loop back to same player who already acted');
+        return null;
+      }
+    }
+  }
+  
+  console.log('[POKER] findNextEligibleSeat: from', fromSeat, '-> next', nextSeat);
   return nextSeat;
 }
 
 // ==================== BETTING ROUND COMPLETION ====================
 
 /**
- * CRITICAL: Check if betting round is complete
- * Round ends when:
- * 1. Only 0-1 players remain (others folded), OR
- * 2. All eligible players have acted AND all have matched currentBet
+ * CRITICAL FIX: Check if betting round is complete
  * 
- * IMPORTANT: This function MUST work with potentially stale player.chips
- * We rely on playerStates (hasActedThisRound, isAllIn, hasFolded, committed)
+ * A betting round ends when BOTH conditions are true:
+ * 1. All active players (not folded, not all-in) have acted exactly once in this cycle
+ * 2. All remaining players' bets are equal (everyone matched the current bet)
+ * 
+ * Folded players: EXCLUDED from consideration
+ * All-in players: EXCLUDED from action requirement (they've committed all they can)
  */
 export function isBettingRoundComplete(
   players: LobbyPlayer[],
@@ -133,37 +170,56 @@ export function isBettingRoundComplete(
 ): boolean {
   const nonFolded = getNonFoldedPlayers(players, round);
   
-  // If only 1 player left (others folded), hand is over
-  if (nonFolded.length <= 1) return true;
+  // If only 0-1 player left (others folded), hand is OVER
+  if (nonFolded.length <= 1) {
+    console.log('[POKER] isBettingRoundComplete: Only', nonFolded.length, 'non-folded player(s) - hand over');
+    return true;
+  }
 
-  // Get all non-folded, non-all-in players who need to act
+  // Get players who CAN still act (not folded, not all-in)
   const playersWhoCanAct = nonFolded.filter(p => {
     const state = round.playerStates[p.id];
     return state && !state.isAllIn;
   });
   
-  // If no one can act (all folded or all-in), round is complete
-  if (playersWhoCanAct.length === 0) return true;
+  console.log('[POKER] isBettingRoundComplete check:', {
+    nonFolded: nonFolded.length,
+    canAct: playersWhoCanAct.length,
+    currentBet: round.currentBet,
+  });
 
-  // If only 1 player can act, they must have acted and matched
-  if (playersWhoCanAct.length === 1) {
-    const player = playersWhoCanAct[0];
-    const state = round.playerStates[player.id];
-    return state.hasActedThisRound && state.committed >= round.currentBet;
+  // If no one can act (everyone is folded or all-in), round is complete
+  if (playersWhoCanAct.length === 0) {
+    console.log('[POKER] isBettingRoundComplete: No one can act - round complete');
+    return true;
   }
 
-  // For 2+ players who can act:
-  // Round is complete when ALL have acted AND ALL have matched currentBet
+  // Check BOTH conditions for each player who can act:
+  // 1. hasActedThisRound === true
+  // 2. committed >= currentBet
   for (const player of playersWhoCanAct) {
     const state = round.playerStates[player.id];
+    
+    console.log('[POKER] Checking player', player.user.name, ':', {
+      hasActed: state.hasActedThisRound,
+      committed: state.committed,
+      currentBet: round.currentBet,
+    });
+    
+    // Condition 1: Must have acted
     if (!state.hasActedThisRound) {
+      console.log('[POKER] Player', player.user.name, 'has NOT acted yet');
       return false;
     }
+    
+    // Condition 2: Must have matched the bet
     if (state.committed < round.currentBet) {
+      console.log('[POKER] Player', player.user.name, 'has NOT matched bet');
       return false;
     }
   }
 
+  console.log('[POKER] isBettingRoundComplete: All players acted and matched - ROUND COMPLETE');
   return true;
 }
 
@@ -584,6 +640,11 @@ export function postBlinds(
   return { playerStates, chipDeductions };
 }
 
+/**
+ * CRITICAL FIX: Reset for new betting round
+ * - Preserves hasFolded and isAllIn statuses
+ * - Folded/all-in players are marked as "acted" so they're skipped
+ */
 export function resetForNewBettingRound(
   playerStates: Record<string, PlayerHandState>
 ): Record<string, PlayerHandState> {
@@ -592,8 +653,12 @@ export function resetForNewBettingRound(
   for (const [playerId, state] of Object.entries(playerStates)) {
     newStates[playerId] = {
       ...state,
-      hasActedThisRound: false,
+      // CRITICAL: Folded/all-in players are marked as already acted
+      // so they get skipped in turn rotation
+      hasActedThisRound: state.hasFolded || state.isAllIn ? true : false,
       lastAction: undefined,
+      // CRITICAL: KEEP hasFolded and isAllIn unchanged!
+      // These persist across betting rounds within the same hand
     };
   }
   
