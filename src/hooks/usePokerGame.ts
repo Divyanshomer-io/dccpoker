@@ -474,27 +474,36 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
 
       updatedRound.pots = calculatePots(updatedStates);
 
-      // Check if hand is over (all but one folded)
+      // === STEP 1: Check if hand is over (all but one folded) ===
       if (isHandOver(players, updatedRound)) {
         const winner = getWinnerByFold(players, updatedRound);
         if (winner) {
           const potTotal = updatedRound.pots.reduce((sum, pot) => sum + pot.amount, 0);
 
-          const winnerPlayer = players.find(p => p.id === winner.id);
-          if (winnerPlayer) {
+          // CRITICAL: Fetch fresh chip count before awarding
+          const { data: freshWinner } = await supabase
+            .from('lobby_players')
+            .select('chips')
+            .eq('id', winner.id)
+            .single();
+
+          if (freshWinner) {
             await supabase
               .from('lobby_players')
-              .update({ chips: winnerPlayer.chips + potTotal })
+              .update({ chips: freshWinner.chips + potTotal })
               .eq('id', winner.id);
           }
 
           updatedRound.stage = 'settled';
+          console.log('[POKER] Hand over - winner by fold:', winner.user.name, 'wins', potTotal);
           toast({ title: `${winner.user.name} wins!`, description: `Won ${potTotal.toLocaleString()} chips` });
         }
-      } else if (isBettingRoundComplete(players, updatedRound)) {
-        // Betting round complete - check if all-in runout or normal progression
-        console.log('[POKER] Betting round complete, advancing stage from:', updatedRound.stage);
+      } 
+      // === STEP 2: Check if betting round is complete ===
+      else if (isBettingRoundComplete(players, updatedRound)) {
+        console.log('[POKER] Betting round complete, current stage:', updatedRound.stage);
         
+        // Check if all remaining players are all-in
         if (allPlayersAllIn(players, updatedRound)) {
           // All players all-in - go directly to showdown, reveal all cards
           updatedRound.stage = 'showdown';
@@ -514,22 +523,20 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
           // Normal progression - go to awaiting stage for host to reveal
           const nextStage = getNextStage(updatedRound.stage);
           updatedRound.stage = nextStage as GameStage;
-          
-          // Don't reset betting yet - that happens when host reveals cards
-          // Just mark that no one should act during awaiting stage
-          console.log('[POKER] Advancing to awaiting stage:', nextStage);
+          console.log('[POKER] Advancing to stage:', nextStage);
         }
-      } else {
-        // Continue betting - find next eligible player
+      } 
+      // === STEP 3: Continue betting - find next eligible player ===
+      else {
         const nextSeat = findNextEligibleSeat(players, updatedRound, currentPlayer.seatIndex);
-        console.log('[POKER] Continuing betting, next seat:', nextSeat);
+        console.log('[POKER] Continue betting, next seat:', nextSeat);
         
         if (nextSeat !== null) {
           updatedRound.currentTurnSeatIndex = nextSeat;
         } else {
-          // No eligible players found - this means round should be complete
-          // Force advance to next stage
-          console.log('[POKER] No eligible seat found, forcing stage advance');
+          // No eligible players found - round should be complete
+          // This is a safety net - should not normally happen
+          console.log('[POKER] SAFETY: No eligible seat found, forcing stage advance');
           const nextStage = getNextStage(updatedRound.stage);
           updatedRound.stage = nextStage as GameStage;
         }
@@ -615,10 +622,32 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
       updatedRound.lastAggressorSeat = undefined;
       updatedRound.playerStates = resetForNewBettingRound(currentRound.playerStates);
 
-      // Set first to act for postflop
-      const firstToAct = getFirstToActSeat(players, updatedRound, 'postflop');
-      if (firstToAct !== null) {
-        updatedRound.currentTurnSeatIndex = firstToAct;
+      // CRITICAL: Check if anyone can actually act in the new round
+      // If all remaining players are all-in, skip to showdown
+      const eligible = getEligiblePlayers(players, updatedRound);
+      console.log('[POKER] After card reveal, eligible players:', eligible.length);
+      
+      if (eligible.length === 0) {
+        // No one can act - all remaining players are all-in
+        // Go directly to showdown, reveal all remaining cards
+        console.log('[POKER] No eligible players after reveal - going to showdown');
+        updatedRound.stage = 'showdown';
+        
+        // Reveal all 5 community cards
+        if (updatedRound.communityCards.length < 5) {
+          const remainingCards = 5 - updatedRound.communityCards.length;
+          const nextCardIndex = startIndex + updatedRound.communityCards.length;
+          for (let i = 0; i < remainingCards; i++) {
+            updatedRound.communityCards.push(deck[nextCardIndex + i]);
+          }
+        }
+      } else {
+        // Set first to act for postflop
+        const firstToAct = getFirstToActSeat(players, updatedRound, 'postflop');
+        if (firstToAct !== null) {
+          updatedRound.currentTurnSeatIndex = firstToAct;
+          console.log('[POKER] First to act after reveal:', firstToAct);
+        }
       }
 
       // Update database
