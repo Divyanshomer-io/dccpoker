@@ -1,5 +1,5 @@
-// Texas Hold'em Poker Engine - AUTHORITATIVE VERSION
-// Fixes: folding, betting round detection, all-in handling, pot management
+// Custom Card Game Engine (NOT Poker)
+// Rules as defined in requirements - 3 reveal rounds, blind-based betting
 import type { LobbyPlayer, GameRound, Pot, PlayerHandState, PokerAction, ActionValidation } from '@/types/casino';
 
 // ==================== CONSTANTS ====================
@@ -28,46 +28,39 @@ export function shuffleDeck(deck: string[]): string[] {
   return shuffled;
 }
 
-// ==================== ELIGIBILITY CHECKS ====================
+// ==================== PLAYER STATE CHECKS ====================
 
 /**
- * CRITICAL: Check if player is eligible to act
- * A player can act ONLY if:
- * - Not folded
- * - Not all-in
- * - Has effective chips remaining (considering committed amount)
- * 
- * NOTE: We rely on isAllIn flag rather than player.chips because
- * player.chips may be stale (not yet synced from DB after action)
+ * Player states:
+ * - ACTIVE: Can act, default at game start
+ * - FOLDED: Cannot act again this GAME (not round)
+ * - ALL_IN: Cannot act again this GAME but eligible for pot
+ * - OUT_OF_GAME: Disconnected players
  */
-export function isEligibleToAct(player: LobbyPlayer, state: PlayerHandState | undefined): boolean {
+
+export function isPlayerActive(player: LobbyPlayer, round: GameRound): boolean {
+  const state = round.playerStates[player.id];
   if (!state) return false;
-  if (state.hasFolded) return false;
-  if (state.isAllIn) return false;
-  // If isAllIn is not set but player went all-in, catch it here
-  // This handles the case where player.chips is stale
-  if (!player.active) return false;
+  if (state.hasFolded) return false;  // FOLDED - permanently out this game
+  if (state.isAllIn) return false;     // ALL_IN - cannot act but eligible for pot
+  if (!player.active) return false;     // Disconnected
   return true;
 }
 
 /**
- * Get eligible players (can still act in this betting round)
- * Uses playerStates for eligibility determination
+ * Get players who can still act (ACTIVE only - not folded, not all-in)
  */
 export function getEligiblePlayers(
   players: LobbyPlayer[],
   round: GameRound
 ): LobbyPlayer[] {
   return players
-    .filter(p => {
-      const state = round.playerStates[p.id];
-      return state && !state.hasFolded && !state.isAllIn && p.active;
-    })
+    .filter(p => isPlayerActive(p, round) && p.chips > 0)
     .sort((a, b) => a.seatIndex - b.seatIndex);
 }
 
 /**
- * Get non-folded players (includes all-in, for pot eligibility)
+ * Get non-folded players (includes ALL_IN for pot eligibility)
  */
 export function getNonFoldedPlayers(
   players: LobbyPlayer[],
@@ -84,50 +77,24 @@ export function getNonFoldedPlayers(
 // ==================== TURN ADVANCEMENT ====================
 
 /**
- * CRITICAL FIX: Find next eligible seat clockwise from a given seat
- * Only returns players who:
- * - Are NOT folded
- * - Are NOT all-in
- * - Are active
- * - Have NOT already acted this round OR need to respond to a raise
- * 
- * Returns null if no one can act (triggers round completion)
+ * Find next player in clockwise order who can act
+ * Skips: folded, all-in players
  */
 export function findNextEligibleSeat(
   players: LobbyPlayer[],
   round: GameRound,
   fromSeat: number
 ): number | null {
-  // Get players who can still take actions
-  const eligible = players.filter(p => {
-    const state = round.playerStates[p.id];
-    if (!state) return false;
-    if (state.hasFolded) return false;  // Skip folded
-    if (state.isAllIn) return false;     // Skip all-in
-    if (!p.active) return false;          // Skip inactive
-    return true;
-  }).sort((a, b) => a.seatIndex - b.seatIndex);
-    
+  const eligible = getEligiblePlayers(players, round);
+  
   if (eligible.length === 0) {
-    console.log('[POKER] findNextEligibleSeat: No eligible players');
+    console.log('[GAME] findNextEligibleSeat: No eligible players');
     return null;
-  }
-
-  // If only one eligible player, that's the next seat
-  if (eligible.length === 1) {
-    const onlyPlayer = eligible[0];
-    const state = round.playerStates[onlyPlayer.id];
-    // If this player has already acted and matched, round is over
-    if (state.hasActedThisRound && state.committed >= round.currentBet) {
-      console.log('[POKER] findNextEligibleSeat: Only one player and they already acted');
-      return null;
-    }
-    return onlyPlayer.seatIndex;
   }
 
   const seats = eligible.map(p => p.seatIndex);
   
-  // Find first seat STRICTLY after fromSeat (clockwise)
+  // Find first seat AFTER fromSeat (clockwise)
   let nextSeat = seats.find(s => s > fromSeat);
   
   // Wrap around if needed
@@ -135,34 +102,18 @@ export function findNextEligibleSeat(
     nextSeat = seats[0];
   }
   
-  // CRITICAL: Don't return the same seat we started from
-  // unless they need to act (haven't acted or need to respond to raise)
-  if (nextSeat === fromSeat) {
-    const player = players.find(p => p.seatIndex === nextSeat);
-    if (player) {
-      const state = round.playerStates[player.id];
-      if (state && state.hasActedThisRound && state.committed >= round.currentBet) {
-        console.log('[POKER] findNextEligibleSeat: Would loop back to same player who already acted');
-        return null;
-      }
-    }
-  }
-  
-  console.log('[POKER] findNextEligibleSeat: from', fromSeat, '-> next', nextSeat);
+  console.log('[GAME] findNextEligibleSeat: from', fromSeat, '-> next', nextSeat);
   return nextSeat;
 }
 
-// ==================== BETTING ROUND COMPLETION ====================
+// ==================== ROUND COMPLETION DETECTION ====================
 
 /**
- * CRITICAL FIX: Check if betting round is complete
+ * CRITICAL: Round ends ONLY when:
+ * 1. Every ACTIVE player (not folded, not all-in) has either checked/matched
+ * 2. Turn has completed a full rotation back to the blind
  * 
- * A betting round ends when BOTH conditions are true:
- * 1. All active players (not folded, not all-in) have acted exactly once in this cycle
- * 2. All remaining players' bets are equal (everyone matched the current bet)
- * 
- * Folded players: EXCLUDED from consideration
- * All-in players: EXCLUDED from action requirement (they've committed all they can)
+ * This is based on hasActedThisRound flag
  */
 export function isBettingRoundComplete(
   players: LobbyPlayer[],
@@ -170,69 +121,76 @@ export function isBettingRoundComplete(
 ): boolean {
   const nonFolded = getNonFoldedPlayers(players, round);
   
-  // If only 0-1 player left (others folded), hand is OVER
+  // If only 0-1 player left (others folded), game is OVER
   if (nonFolded.length <= 1) {
-    console.log('[POKER] isBettingRoundComplete: Only', nonFolded.length, 'non-folded player(s) - hand over');
+    console.log('[GAME] isBettingRoundComplete: Only', nonFolded.length, 'non-folded player(s) - game over');
     return true;
   }
 
   // Get players who CAN still act (not folded, not all-in)
-  const playersWhoCanAct = nonFolded.filter(p => {
-    const state = round.playerStates[p.id];
-    return state && !state.isAllIn;
-  });
+  const activePlayers = getEligiblePlayers(players, round);
   
-  console.log('[POKER] isBettingRoundComplete check:', {
+  console.log('[GAME] isBettingRoundComplete check:', {
     nonFolded: nonFolded.length,
-    canAct: playersWhoCanAct.length,
+    active: activePlayers.length,
     currentBet: round.currentBet,
   });
 
-  // If no one can act (everyone is folded or all-in), round is complete
-  if (playersWhoCanAct.length === 0) {
-    console.log('[POKER] isBettingRoundComplete: No one can act - round complete');
+  // If no active players (everyone is folded or all-in), round is complete
+  if (activePlayers.length === 0) {
+    console.log('[GAME] isBettingRoundComplete: No active players - round complete');
     return true;
   }
 
-  // Check BOTH conditions for each player who can act:
+  // Check BOTH conditions for each active player:
   // 1. hasActedThisRound === true
-  // 2. committed >= currentBet
-  for (const player of playersWhoCanAct) {
+  // 2. committed >= currentBet (matched or exceeded)
+  for (const player of activePlayers) {
     const state = round.playerStates[player.id];
     
-    console.log('[POKER] Checking player', player.user.name, ':', {
-      hasActed: state.hasActedThisRound,
-      committed: state.committed,
+    console.log('[GAME] Checking player', player.user.name, ':', {
+      hasActed: state?.hasActedThisRound,
+      committed: state?.committed,
       currentBet: round.currentBet,
     });
     
-    // Condition 1: Must have acted
-    if (!state.hasActedThisRound) {
-      console.log('[POKER] Player', player.user.name, 'has NOT acted yet');
+    if (!state) {
+      console.log('[GAME] Player', player.user.name, 'has no state');
       return false;
     }
     
-    // Condition 2: Must have matched the bet
+    // Must have acted this round
+    if (!state.hasActedThisRound) {
+      console.log('[GAME] Player', player.user.name, 'has NOT acted yet');
+      return false;
+    }
+    
+    // Must have matched the bet
     if (state.committed < round.currentBet) {
-      console.log('[POKER] Player', player.user.name, 'has NOT matched bet');
+      console.log('[GAME] Player', player.user.name, 'has NOT matched bet');
       return false;
     }
   }
 
-  console.log('[POKER] isBettingRoundComplete: All players acted and matched - ROUND COMPLETE');
+  console.log('[GAME] isBettingRoundComplete: All players acted and matched - ROUND COMPLETE');
   return true;
 }
 
 /**
- * Check if hand is over (only one player remaining)
+ * Check if game is over (only one non-folded player remaining)
  */
-export function isHandOver(
+export function isGameOver(
   players: LobbyPlayer[],
   round: GameRound
 ): boolean {
   const nonFolded = getNonFoldedPlayers(players, round);
   return nonFolded.length <= 1;
 }
+
+/**
+ * Alias for backwards compatibility
+ */
+export const isHandOver = isGameOver;
 
 /**
  * Get winner when all others have folded
@@ -246,7 +204,7 @@ export function getWinnerByFold(
 }
 
 /**
- * Check if all remaining players are all-in
+ * Check if all remaining players are all-in (no one can act)
  */
 export function allPlayersAllIn(
   players: LobbyPlayer[],
@@ -255,12 +213,15 @@ export function allPlayersAllIn(
   const nonFolded = getNonFoldedPlayers(players, round);
   if (nonFolded.length <= 1) return false;
 
-  const eligible = getEligiblePlayers(players, round);
-  return eligible.length <= 1; // 0 or 1 can act = others all-in
+  const active = getEligiblePlayers(players, round);
+  return active.length === 0; // No one can act = all remaining are all-in
 }
 
-// ==================== BLIND POSITIONS ====================
+// ==================== BLIND/DEALER POSITIONS ====================
 
+/**
+ * Get next dealer seat (clockwise)
+ */
 export function getNextDealerSeat(
   players: LobbyPlayer[],
   currentDealerSeat: number
@@ -281,6 +242,11 @@ export function getNextDealerSeat(
   return seats[(idx + 1) % seats.length];
 }
 
+/**
+ * Calculate blind positions
+ * In this custom game, "blind" is the player who bets first each round
+ * and must bet >= minimum or check if pot is 0
+ */
 export function calculateBlindPositions(
   players: LobbyPlayer[],
   dealerSeat: number
@@ -317,6 +283,9 @@ export function calculateBlindPositions(
   }
 }
 
+/**
+ * Get first to act seat - in this custom game, blind always acts first each round
+ */
 export function getFirstToActSeat(
   players: LobbyPlayer[],
   round: GameRound,
@@ -325,29 +294,15 @@ export function getFirstToActSeat(
   const eligible = getEligiblePlayers(players, round);
   if (eligible.length === 0) return null;
 
-  const nonFolded = getNonFoldedPlayers(players, round);
-  const isHeadsUp = nonFolded.length === 2;
-
-  if (stage === 'preflop') {
-    if (isHeadsUp) {
-      // Heads-up preflop: SB acts first
-      const sb = eligible.find(p => p.seatIndex === round.smallBlindSeatIndex);
-      if (sb) return sb.seatIndex;
-    } else {
-      // 3+: after BB
-      return findNextEligibleSeat(players, round, round.bigBlindSeatIndex);
-    }
-  } else {
-    // Postflop
-    if (isHeadsUp) {
-      // Heads-up postflop: BB acts first
-      const bb = eligible.find(p => p.seatIndex === round.bigBlindSeatIndex);
-      if (bb) return bb.seatIndex;
-    }
-    return findNextEligibleSeat(players, round, round.dealerSeatIndex);
+  // In this custom game, the big blind (or equivalent) acts first
+  // For simplicity, we use the bigBlindSeatIndex as the "blind" position
+  const blindPlayer = eligible.find(p => p.seatIndex === round.bigBlindSeatIndex);
+  if (blindPlayer) {
+    return blindPlayer.seatIndex;
   }
   
-  return eligible[0]?.seatIndex || null;
+  // If blind is folded/all-in, find next eligible clockwise from blind
+  return findNextEligibleSeat(players, round, round.bigBlindSeatIndex);
 }
 
 // ==================== POT CALCULATION ====================
@@ -410,6 +365,7 @@ export function distributePot(
     return { [winnerIds[0]]: pot.amount };
   }
 
+  // Sort winners by seat order (clockwise from dealer) for remainder distribution
   const sortedWinners = [...winnerIds].sort((a, b) => {
     const playerA = players.find(p => p.id === a);
     const playerB = players.find(p => p.id === b);
@@ -442,17 +398,17 @@ export function validateAction(
 ): ActionValidation {
   const state = round.playerStates[player.id];
   if (!state) {
-    return { valid: false, reason: 'Player not in hand' };
+    return { valid: false, reason: 'Player not in game' };
   }
 
   // CRITICAL: Cannot act if folded
   if (state.hasFolded) {
-    return { valid: false, reason: 'Player has folded' };
+    return { valid: false, reason: 'Player has folded - cannot act this game' };
   }
 
   // CRITICAL: Cannot act if all-in
   if (state.isAllIn) {
-    return { valid: false, reason: 'Player is all-in' };
+    return { valid: false, reason: 'Player is all-in - cannot act this game' };
   }
 
   // CRITICAL: Cannot act if no chips
@@ -641,9 +597,9 @@ export function postBlinds(
 }
 
 /**
- * CRITICAL FIX: Reset for new betting round
- * - Preserves hasFolded and isAllIn statuses
- * - Folded/all-in players are marked as "acted" so they're skipped
+ * Reset player states for new betting round
+ * - Folded/All-in players stay as they are (cannot act again this GAME)
+ * - Active players get hasActedThisRound = false
  */
 export function resetForNewBettingRound(
   playerStates: Record<string, PlayerHandState>
@@ -653,8 +609,7 @@ export function resetForNewBettingRound(
   for (const [playerId, state] of Object.entries(playerStates)) {
     newStates[playerId] = {
       ...state,
-      // CRITICAL: Folded/all-in players are marked as already acted
-      // so they get skipped in turn rotation
+      // CRITICAL: Folded/all-in players are marked as already acted so they're skipped
       hasActedThisRound: state.hasFolded || state.isAllIn ? true : false,
       lastAction: undefined,
       // CRITICAL: KEEP hasFolded and isAllIn unchanged!
@@ -665,14 +620,28 @@ export function resetForNewBettingRound(
   return newStates;
 }
 
+// ==================== GAME STAGE MANAGEMENT ====================
+
 /**
- * Get next stage - now uses awaiting stages for host-controlled reveal
+ * Get the current reveal round number (1, 2, or 3)
+ * Based on the stage of the game
+ */
+export function getRevealRoundNumber(stage: string): number {
+  if (stage === 'preflop' || stage === 'awaiting_flop') return 0;
+  if (stage === 'flop' || stage === 'awaiting_turn') return 1;
+  if (stage === 'turn' || stage === 'awaiting_river') return 2;
+  if (stage === 'river' || stage === 'showdown' || stage === 'settled') return 3;
+  return 0;
+}
+
+/**
+ * Get next stage - uses awaiting stages for host-controlled reveal
  */
 export function getNextStage(currentStage: string): string {
-  // Preflop -> awaiting_flop (host reveals flop)
-  // awaiting_flop -> flop (betting)
-  // flop -> awaiting_turn (host reveals turn)
-  // etc.
+  // Game flow:
+  // preflop betting -> awaiting_flop (host reveals 3 cards) -> flop betting
+  // -> awaiting_turn (host reveals 1 card) -> turn betting
+  // -> awaiting_river (host reveals 1 card) -> river betting -> showdown
   const stageMap: Record<string, string> = {
     'preflop': 'awaiting_flop',
     'awaiting_flop': 'flop',
@@ -696,10 +665,46 @@ export function isAwaitingStage(stage: string): boolean {
 
 /**
  * Get the number of community cards to reveal for a given awaiting stage
+ * Round 1: 3 cards (flop)
+ * Round 2: 1 card (turn)
+ * Round 3: 1 card (river)
  */
 export function getCardsToReveal(stage: string): number {
-  if (stage === 'awaiting_flop') return 3;
-  if (stage === 'awaiting_turn') return 1;
-  if (stage === 'awaiting_river') return 1;
+  if (stage === 'awaiting_flop') return 3;  // Round 1: reveal 3 cards
+  if (stage === 'awaiting_turn') return 1;  // Round 2: reveal 1 card
+  if (stage === 'awaiting_river') return 1; // Round 3: reveal 1 card
   return 0;
+}
+
+/**
+ * Check if game should auto-end (after round 3 reveal is done)
+ */
+export function shouldGameEndAfterReveal(stage: string): boolean {
+  // After river betting is complete, game goes to showdown
+  return stage === 'showdown';
+}
+
+/**
+ * Get next blind seat (clockwise) for next game
+ */
+export function getNextBlindSeat(
+  players: LobbyPlayer[],
+  currentBlindSeat: number
+): number {
+  const active = players
+    .filter(p => p.active && p.chips > 0)
+    .sort((a, b) => a.seatIndex - b.seatIndex);
+  
+  if (active.length === 0) return currentBlindSeat;
+  
+  const seats = active.map(p => p.seatIndex);
+  const currentIdx = seats.indexOf(currentBlindSeat);
+  
+  if (currentIdx === -1) {
+    // Current blind not found, pick next higher seat or wrap
+    return seats.find(s => s > currentBlindSeat) || seats[0];
+  }
+  
+  // Return next seat clockwise
+  return seats[(currentIdx + 1) % seats.length];
 }

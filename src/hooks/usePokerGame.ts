@@ -14,7 +14,7 @@ import {
   calculatePots,
   distributePot,
   isBettingRoundComplete,
-  isHandOver,
+  isGameOver,
   getWinnerByFold,
   allPlayersAllIn,
   getNextStage,
@@ -24,6 +24,7 @@ import {
   getEligiblePlayers,
   getNonFoldedPlayers,
   isAwaitingStage,
+  getNextBlindSeat,
 } from '@/lib/pokerEngine';
 
 interface UsePokerGameProps {
@@ -266,7 +267,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
         }
       }
 
-      toast({ title: 'Hand Started!', description: 'Good luck!' });
+      toast({ title: 'Game Started!', description: 'Good luck!' });
       await fetchCurrentRound();
       return true;
     } catch (err: any) {
@@ -283,6 +284,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
     const currentPlayer = players.find(p => p.userId === currentUser.id);
     if (!currentPlayer) return false;
 
+    // CRITICAL: Check if it's actually this player's turn
     if (currentRound.currentTurnSeatIndex !== currentPlayer.seatIndex) {
       toast({ title: 'Not your turn!', variant: 'destructive' });
       return false;
@@ -290,13 +292,15 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
 
     const playerState = currentRound.playerStates[currentPlayer.id];
     
+    // CRITICAL: Folded players CANNOT act
     if (playerState?.hasFolded) {
-      toast({ title: 'You have folded', variant: 'destructive' });
+      toast({ title: 'You have folded', description: 'Wait for next game', variant: 'destructive' });
       return false;
     }
 
+    // CRITICAL: All-in players CANNOT act
     if (playerState?.isAllIn) {
-      toast({ title: 'You are all-in', variant: 'destructive' });
+      toast({ title: 'You are all-in', description: 'Wait for game to finish', variant: 'destructive' });
       return false;
     }
 
@@ -384,6 +388,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
           updatedRound.lastRaiseAmount = betAmount;
           updatedRound.lastAggressorSeat = currentPlayer.seatIndex;
 
+          // Reset hasActedThisRound for other ACTIVE players (not folded, not all-in)
           for (const [pid, state] of Object.entries(updatedStates)) {
             if (pid !== playerId && !state.hasFolded && !state.isAllIn) {
               updatedStates[pid] = { ...state, hasActedThisRound: false };
@@ -418,6 +423,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
           }
           updatedRound.lastAggressorSeat = currentPlayer.seatIndex;
 
+          // Reset hasActedThisRound for other ACTIVE players
           for (const [pid, state] of Object.entries(updatedStates)) {
             if (pid !== playerId && !state.hasFolded && !state.isAllIn) {
               updatedStates[pid] = { ...state, hasActedThisRound: false };
@@ -451,6 +457,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
             }
             updatedRound.lastAggressorSeat = currentPlayer.seatIndex;
 
+            // Reset hasActedThisRound for other ACTIVE players
             for (const [pid, state] of Object.entries(updatedStates)) {
               if (pid !== playerId && !state.hasFolded && !state.isAllIn) {
                 updatedStates[pid] = { ...state, hasActedThisRound: false };
@@ -465,6 +472,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
 
       updatedRound.playerStates = updatedStates;
 
+      // Deduct chips from player
       if (chipsToDeduct > 0) {
         await supabase
           .from('lobby_players')
@@ -472,15 +480,16 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
           .eq('id', playerId);
       }
 
+      // Recalculate pots
       updatedRound.pots = calculatePots(updatedStates);
 
-      // === STEP 1: Check if hand is over (all but one folded) ===
-      if (isHandOver(players, updatedRound)) {
+      // === STEP 1: Check if game is over (all but one folded) ===
+      if (isGameOver(players, updatedRound)) {
         const winner = getWinnerByFold(players, updatedRound);
         if (winner) {
           const potTotal = updatedRound.pots.reduce((sum, pot) => sum + pot.amount, 0);
 
-          // CRITICAL: Fetch fresh chip count before awarding
+          // Fetch fresh chip count before awarding
           const { data: freshWinner } = await supabase
             .from('lobby_players')
             .select('chips')
@@ -495,13 +504,13 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
           }
 
           updatedRound.stage = 'settled';
-          console.log('[POKER] Hand over - winner by fold:', winner.user.name, 'wins', potTotal);
+          console.log('[GAME] Game over - winner by fold:', winner.user.name, 'wins', potTotal);
           toast({ title: `${winner.user.name} wins!`, description: `Won ${potTotal.toLocaleString()} chips` });
         }
       } 
       // === STEP 2: Check if betting round is complete ===
       else if (isBettingRoundComplete(players, updatedRound)) {
-        console.log('[POKER] Betting round complete, current stage:', updatedRound.stage);
+        console.log('[GAME] Betting round complete, current stage:', updatedRound.stage);
         
         // Check if all remaining players are all-in
         if (allPlayersAllIn(players, updatedRound)) {
@@ -518,25 +527,24 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
           if (updatedRound.communityCards.length < 5) {
             updatedRound.communityCards = deck.slice(startIndex, startIndex + 5);
           }
-          console.log('[POKER] All players all-in, going to showdown');
+          console.log('[GAME] All players all-in, going to showdown');
         } else {
           // Normal progression - go to awaiting stage for host to reveal
           const nextStage = getNextStage(updatedRound.stage);
           updatedRound.stage = nextStage as GameStage;
-          console.log('[POKER] Advancing to stage:', nextStage);
+          console.log('[GAME] Advancing to stage:', nextStage);
         }
       } 
       // === STEP 3: Continue betting - find next eligible player ===
       else {
         const nextSeat = findNextEligibleSeat(players, updatedRound, currentPlayer.seatIndex);
-        console.log('[POKER] Continue betting, next seat:', nextSeat);
+        console.log('[GAME] Continue betting, next seat:', nextSeat);
         
         if (nextSeat !== null) {
           updatedRound.currentTurnSeatIndex = nextSeat;
         } else {
           // No eligible players found - round should be complete
-          // This is a safety net - should not normally happen
-          console.log('[POKER] SAFETY: No eligible seat found, forcing stage advance');
+          console.log('[GAME] SAFETY: No eligible seat found, forcing stage advance');
           const nextStage = getNextStage(updatedRound.stage);
           updatedRound.stage = nextStage as GameStage;
         }
@@ -583,6 +591,9 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
 
   /**
    * Host reveals community cards and starts next betting round
+   * Round 1: Reveal 3 cards
+   * Round 2: Reveal 1 card
+   * Round 3: Reveal 1 card
    */
   const revealCommunityCards = async () => {
     if (!currentRound || !currentUser) return false;
@@ -606,47 +617,57 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
 
       // Reveal cards based on stage
       if (stage === 'awaiting_flop') {
+        // Round 1: Reveal 3 cards
         updatedRound.communityCards = deck.slice(startIndex, startIndex + 3);
         updatedRound.stage = 'flop';
       } else if (stage === 'awaiting_turn') {
+        // Round 2: Reveal 1 card
         updatedRound.communityCards = [...updatedRound.communityCards, deck[startIndex + 3]];
         updatedRound.stage = 'turn';
       } else if (stage === 'awaiting_river') {
+        // Round 3: Reveal 1 card
         updatedRound.communityCards = [...updatedRound.communityCards, deck[startIndex + 4]];
         updatedRound.stage = 'river';
       }
 
-      // Reset betting for new round
+      // Reset betting for new round - but POT DOES NOT RESET
       updatedRound.currentBet = 0;
       updatedRound.lastRaiseAmount = minBlind * 2;
       updatedRound.lastAggressorSeat = undefined;
       updatedRound.playerStates = resetForNewBettingRound(currentRound.playerStates);
 
-      // CRITICAL: Check if anyone can actually act in the new round
-      // If all remaining players are all-in, skip to showdown
+      // Check if anyone can actually act in the new round
       const eligible = getEligiblePlayers(players, updatedRound);
-      console.log('[POKER] After card reveal, eligible players:', eligible.length);
+      console.log('[GAME] After card reveal, eligible players:', eligible.length);
       
       if (eligible.length === 0) {
-        // No one can act - all remaining players are all-in
-        // Go directly to showdown, reveal all remaining cards
-        console.log('[POKER] No eligible players after reveal - going to showdown');
-        updatedRound.stage = 'showdown';
-        
-        // Reveal all 5 community cards
-        if (updatedRound.communityCards.length < 5) {
-          const remainingCards = 5 - updatedRound.communityCards.length;
-          const nextCardIndex = startIndex + updatedRound.communityCards.length;
-          for (let i = 0; i < remainingCards; i++) {
-            updatedRound.communityCards.push(deck[nextCardIndex + i]);
+        // No one can act - all remaining players are all-in or folded
+        // Check if only one player left
+        const nonFolded = getNonFoldedPlayers(players, updatedRound);
+        if (nonFolded.length <= 1) {
+          // Game over - one player left
+          console.log('[GAME] Only one non-folded player, game over');
+          updatedRound.stage = 'showdown';
+        } else {
+          // All remaining are all-in - go to showdown, reveal remaining cards
+          console.log('[GAME] All players all-in - going to showdown');
+          updatedRound.stage = 'showdown';
+          
+          // Reveal all remaining community cards
+          if (updatedRound.communityCards.length < 5) {
+            const remainingCards = 5 - updatedRound.communityCards.length;
+            const nextCardIndex = startIndex + updatedRound.communityCards.length;
+            for (let i = 0; i < remainingCards; i++) {
+              updatedRound.communityCards.push(deck[nextCardIndex + i]);
+            }
           }
         }
       } else {
-        // Set first to act for postflop
+        // Set first to act - in this game, blind (BB) acts first
         const firstToAct = getFirstToActSeat(players, updatedRound, 'postflop');
         if (firstToAct !== null) {
           updatedRound.currentTurnSeatIndex = firstToAct;
-          console.log('[POKER] First to act after reveal:', firstToAct);
+          console.log('[GAME] First to act after reveal:', firstToAct);
         }
       }
 
@@ -743,6 +764,9 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
     }
   };
 
+  /**
+   * Start next game with blind shifting clockwise
+   */
   const startNewRound = useCallback(async () => {
     if (!currentRound) return false;
 
@@ -765,6 +789,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
       return false;
     }
 
+    // Shift dealer (and thus blind) clockwise for next game
     const nextDealerSeat = getNextDealerSeat(
       activePlayers.map((p: any) => ({
         ...p,
@@ -777,6 +802,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
 
     const dealerIndex = activePlayers.findIndex((p: any) => p.seat_index === nextDealerSeat);
     
+    // Reset deck for new game
     deckRef.current = [];
     
     return startGame(dealerIndex >= 0 ? dealerIndex : 0);
@@ -784,14 +810,13 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
 
   /**
    * End game and calculate settlement
-   * Returns settlement data for immediate display
    */
   const endGame = async (): Promise<Settlement | null> => {
     if (!lobbyId) return null;
 
     setLoading(true);
     try {
-      // Handle unsettled pots if round is active
+      // Handle unsettled pots if game is active
       if (currentRound && currentRound.stage !== 'settled' && currentRound.stage !== 'game_finished') {
         const nonFolded = getNonFoldedPlayers(players, currentRound);
         if (nonFolded.length > 0 && currentRound.pots.length > 0) {
@@ -799,6 +824,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
           const sharePerPlayer = Math.floor(totalPot / nonFolded.length);
           const remainder = totalPot % nonFolded.length;
 
+          // Award pot to remaining players
           for (let i = 0; i < nonFolded.length; i++) {
             const player = nonFolded[i];
             const chips = sharePerPlayer + (i < remainder ? 1 : 0);
@@ -824,7 +850,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
         })
         .eq('id', lobbyId);
 
-      // CRITICAL: Fetch fresh player data for accurate settlement
+      // Fetch fresh player data for accurate settlement
       const freshPlayers = await fetchFreshPlayers();
 
       // Calculate settlement with fresh data
@@ -866,7 +892,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
     }
   };
 
-  // Auto-start next round when settled
+  // Auto-start next game when settled
   useEffect(() => {
     if (currentRound?.stage === 'settled' && !loading) {
       if (autoNextRoundTimer.current) {

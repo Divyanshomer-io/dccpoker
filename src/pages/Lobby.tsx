@@ -149,12 +149,9 @@ export default function Lobby() {
   const isGameStarted = currentLobby.status === 'in_game' || (gameRound !== null && gameRound.stage !== 'waiting');
   
   // Determine if we're in an active betting stage (not awaiting, not showdown, not settled)
+  // Active betting stages where players can act
   const isBettingStage = gameRound && 
-    !isAwaitingStage(gameRound.stage) &&
-    gameRound.stage !== 'waiting' && 
-    gameRound.stage !== 'showdown' &&
-    gameRound.stage !== 'settled' &&
-    gameRound.stage !== 'game_finished';
+    ['preflop', 'flop', 'turn', 'river'].includes(gameRound.stage);
 
   const isAwaitingReveal = gameRound && isAwaitingStage(gameRound.stage);
 
