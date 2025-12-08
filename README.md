@@ -184,18 +184,6 @@ You can extend this easily using:
 
 Core structure already supports external event syncing.
 
----
-
-## 🏷 Suggested Name for the Website
-### **DCC GambleHub — Daddy Chill Casino**  
-(short, branded, sleek)
-
-Other options:
-- **DCC Playhouse**
-- **DCC PokerZone**
-- **DCC Royale**
-- **DCC CardVerse**
-- **DCC Casino Deck**
 
 ---
 
