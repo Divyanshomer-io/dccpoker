@@ -169,47 +169,12 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
         return false;
       }
 
-      const smallBlind = minBlind;
-      const bigBlind = minBlind * 2;
-
       const firstDealerSeat = activePlayers[dealerIndex % activePlayers.length].seatIndex;
       const { dealerSeat, sbSeat, bbSeat } = calculateBlindPositions(activePlayers, firstDealerSeat);
 
       const playerStates = initializePlayerStates(activePlayers);
 
       const roundId = generateId();
-      const initialRound: GameRound = {
-        id: roundId,
-        lobbyId,
-        roundNumber: (currentRound?.roundNumber || 0) + 1,
-        dealerSeatIndex: dealerSeat,
-        smallBlindSeatIndex: sbSeat,
-        bigBlindSeatIndex: bbSeat,
-        currentTurnSeatIndex: 0,
-        stage: 'preflop',
-        pots: [],
-        communityCards: [],
-        currentBet: bigBlind,
-        minRaise: bigBlind,
-        lastRaiseAmount: bigBlind,
-        playerBets: {},
-        playerStates,
-        foldedPlayers: [],
-        allInPlayers: [],
-      };
-
-      const { playerStates: statesAfterBlinds, chipDeductions } = postBlinds(
-        activePlayers,
-        initialRound,
-        smallBlind,
-        bigBlind
-      );
-
-      const allInPlayers = Object.entries(statesAfterBlinds)
-        .filter(([_, s]) => s.isAllIn)
-        .map(([id]) => id);
-      
-      const pots = calculatePots(statesAfterBlinds);
 
       const deck = createNewDeck();
       const playerHands: Record<string, string[]> = {};
@@ -219,17 +184,11 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
         cardIndex += 2;
       }
 
-      const roundWithBlinds: GameRound = {
-        ...initialRound,
-        playerStates: statesAfterBlinds,
-        allInPlayers,
-        pots,
-      };
+      // NO AUTO-BLIND POSTING: Blind player bets manually (>= minBlind)
+      // First to act is the blind player (BB seat)
+      const firstToActSeat = bbSeat;
       
-      // Get first to act - preflop is player after BB (standard) or SB for heads-up
-      const firstToActSeat = getFirstToActSeat(activePlayers, roundWithBlinds, 'preflop');
-      
-      console.log('[GAME] Starting game - dealer:', dealerSeat, 'SB:', sbSeat, 'BB:', bbSeat, 'First to act:', firstToActSeat);
+      console.log('[GAME] Starting game - dealer:', dealerSeat, 'SB:', sbSeat, 'BB (blind):', bbSeat, 'First to act:', firstToActSeat);
 
       const roundData = {
         id: roundId,
@@ -238,19 +197,19 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
         dealer_seat_index: dealerSeat,
         small_blind_seat_index: sbSeat,
         big_blind_seat_index: bbSeat,
-        current_turn_seat_index: firstToActSeat ?? sbSeat,
+        current_turn_seat_index: firstToActSeat,
         stage: 'preflop',
-        pots: JSON.parse(JSON.stringify(pots)),
+        pots: [],
         community_cards: [],
-        current_bet: bigBlind,
-        min_raise: bigBlind,
-        last_raise_amount: bigBlind,
+        current_bet: 0, // No blinds posted automatically
+        min_raise: minBlind, // Min bet is the minBlind
+        last_raise_amount: minBlind,
         player_bets: {},
-        player_states: JSON.parse(JSON.stringify(statesAfterBlinds)),
+        player_states: JSON.parse(JSON.stringify(playerStates)),
         folded_players: [],
-        all_in_players: allInPlayers,
+        all_in_players: [],
         player_hands: playerHands,
-        betting_round_start_seat: firstToActSeat, // Track where betting round starts
+        betting_round_start_seat: firstToActSeat,
       };
 
       const { error } = await supabase.from('game_rounds').insert(roundData);
@@ -261,17 +220,7 @@ export function usePokerGame({ lobbyId, players, minBlind, chipUnitValue = 1, cu
         .update({ status: 'in_game', started_at: new Date().toISOString() })
         .eq('id', lobbyId);
 
-      for (const [playerId, amount] of Object.entries(chipDeductions)) {
-        const player = activePlayers.find(p => p.id === playerId);
-        if (player) {
-          await supabase
-            .from('lobby_players')
-            .update({ chips: player.chips - amount })
-            .eq('id', playerId);
-        }
-      }
-
-      toast({ title: 'Game Started!', description: 'Good luck!' });
+      toast({ title: 'Game Started!', description: 'Blind player bets first!' });
       await fetchCurrentRound();
       return true;
     } catch (err: any) {
