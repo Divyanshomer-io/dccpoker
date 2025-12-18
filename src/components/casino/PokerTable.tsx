@@ -82,11 +82,12 @@ export function PokerTable({
         const position = getPlayerPosition(index, sortedPlayers.length);
         const isCurrentTurn = currentRound?.currentTurnSeatIndex === player.seatIndex;
         const isCurrentUser = player.userId === currentUserId;
+        const isBlind = currentRound?.bigBlindSeatIndex === player.seatIndex;
 
         return (
           <div
             key={player.id}
-            className="absolute -translate-x-1/2 -translate-y-1/2 w-28"
+            className="absolute -translate-x-1/2 -translate-y-1/2 w-28 relative"
             style={position}
           >
             <PlayerCard
@@ -94,6 +95,7 @@ export function PokerTable({
               chipUnitValue={chipUnitValue}
               isCurrentTurn={isCurrentTurn}
               isCurrentUser={isCurrentUser}
+              isBlind={isBlind}
               onBuyClick={isCurrentUser ? onBuyClick : undefined}
               compact
             />
@@ -129,6 +131,7 @@ export function PlayerList({
       {sortedPlayers.map((player) => {
         const isCurrentTurn = currentRound?.currentTurnSeatIndex === player.seatIndex;
         const isCurrentUser = player.userId === currentUserId;
+        const isBlind = currentRound?.bigBlindSeatIndex === player.seatIndex;
 
         return (
           <PlayerCard
@@ -137,6 +140,7 @@ export function PlayerList({
             chipUnitValue={chipUnitValue}
             isCurrentTurn={isCurrentTurn}
             isCurrentUser={isCurrentUser}
+            isBlind={isBlind}
             onBuyClick={isCurrentUser ? onBuyClick : undefined}
             compact
           />

@@ -24,10 +24,14 @@ export function CreateLobbyForm() {
   const [lobbyName, setLobbyName] = useState("");
   const [maxPlayers, setMaxPlayers] = useState("6");
   const [minBlind, setMinBlind] = useState("2");
-  const [chipUnitValue, setChipUnitValue] = useState("0.25");
   const [buyingOptions, setBuyingOptions] = useState([
     { chipsPerBuying: 400, pricePerBuying: 100 }
   ]);
+
+  // Auto-calculate chip unit value from first buying option
+  const chipUnitValue = buyingOptions[0].chipsPerBuying > 0 
+    ? buyingOptions[0].pricePerBuying / buyingOptions[0].chipsPerBuying 
+    : 0.25;
 
   const addBuyingOption = () => {
     if (buyingOptions.length < 3) {
@@ -63,7 +67,7 @@ export function CreateLobbyForm() {
     const lobbyId = await createLobby({
       name: lobbyName.trim(),
       maxPlayers: parseInt(maxPlayers),
-      chipUnitValue: parseFloat(chipUnitValue),
+      chipUnitValue: chipUnitValue,
       minBlind: parseFloat(minBlind),
       buyingOptions,
     });
@@ -143,22 +147,17 @@ export function CreateLobbyForm() {
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
                 <Coins className="w-5 h-5 text-gold" />
-                Chip Configuration
+                Buying Options
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label>Chip Value (₹ per chip)</Label>
-                <Input
-                  type="number"
-                  value={chipUnitValue}
-                  onChange={(e) => setChipUnitValue(e.target.value)}
-                  min="0.01"
-                  step="0.01"
-                  className="h-12"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Example: 0.25 means 100 chips = ₹25
+              {/* Auto-calculated chip value display */}
+              <div className="bg-muted/50 rounded-lg p-3">
+                <p className="text-sm text-muted-foreground">
+                  Chip Value: <span className="text-gold font-semibold">₹{chipUnitValue.toFixed(4)}</span> per chip
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  (Auto-calculated from price ÷ chips)
                 </p>
               </div>
 
@@ -207,7 +206,7 @@ export function CreateLobbyForm() {
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Value: ₹{(option.chipsPerBuying * parseFloat(chipUnitValue || "0")).toFixed(2)}
+                        Value: ₹{option.pricePerBuying.toFixed(2)}
                       </p>
                     </div>
                     {buyingOptions.length > 1 && (

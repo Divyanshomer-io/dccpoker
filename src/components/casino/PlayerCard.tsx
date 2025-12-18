@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { ChipStack } from "./Chip";
 import { Button } from "@/components/ui/button";
-import { Crown, Wifi, WifiOff, ShoppingCart } from "lucide-react";
+import { Crown, Wifi, WifiOff, ShoppingCart, CircleDot } from "lucide-react";
 import type { LobbyPlayer } from "@/types/casino";
 
 interface PlayerCardProps {
@@ -9,6 +9,7 @@ interface PlayerCardProps {
   chipUnitValue: number;
   isCurrentTurn?: boolean;
   isCurrentUser?: boolean;
+  isBlind?: boolean;
   onBuyClick?: () => void;
   compact?: boolean;
 }
@@ -18,6 +19,7 @@ export function PlayerCard({
   chipUnitValue,
   isCurrentTurn = false,
   isCurrentUser = false,
+  isBlind = false,
   onBuyClick,
   compact = false,
 }: PlayerCardProps) {
@@ -28,17 +30,26 @@ export function PlayerCard({
       className={cn(
         "player-seat border rounded-xl transition-all duration-300",
         isCurrentTurn && "current-turn border-primary",
-        !isCurrentTurn && "border-border",
+        !isCurrentTurn && isBlind && "border-gold/50 bg-gold/5",
+        !isCurrentTurn && !isBlind && "border-border",
         isCurrentUser && "ring-2 ring-primary/30",
         needsChips && "opacity-60",
         compact ? "p-2" : "p-3"
       )}
     >
+      {/* Blind indicator badge */}
+      {isBlind && (
+        <div className="absolute -top-2 -right-2 bg-gold text-background text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+          BLIND
+        </div>
+      )}
+
       {/* Header: Avatar, Name, Status */}
       <div className="flex items-center gap-2 mb-2">
         {/* Avatar */}
         <div className={cn(
           "flex items-center justify-center rounded-full bg-muted",
+          isBlind && "ring-2 ring-gold",
           compact ? "w-8 h-8 text-lg" : "w-10 h-10 text-xl"
         )}>
           {player.user.avatar || '🎰'}
@@ -49,6 +60,9 @@ export function PlayerCard({
           <div className="flex items-center gap-1">
             {player.isHost && (
               <Crown className="w-3 h-3 text-gold flex-shrink-0" />
+            )}
+            {isBlind && (
+              <CircleDot className="w-3 h-3 text-gold flex-shrink-0" />
             )}
             <span className={cn(
               "font-semibold truncate",
